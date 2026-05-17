@@ -1,0 +1,154 @@
+# =====================================================================
+# Environment / secrets — NEVER commit
+# =====================================================================
+.env
+.env.*
+!.env.example
+!.env.local.example
+!.env.*.example
+
+# =====================================================================
+# Node / Next.js
+# =====================================================================
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+.yarn-integrity
+.pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+
+# Next.js build / cache
+.next/
+out/
+.turbo/
+.vercel/
+
+# Generic JS build
+dist/
+build/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Coverage
+coverage/
+.nyc_output/
+
+# =====================================================================
+# Flutter / Dart
+# =====================================================================
+
+# Miscellaneous
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/.pub-cache/
+**/.pub/
+**/build/
+**/generated_plugin_registrant.dart
+
+# Symbolicated stack traces
+**/app.*.symbols
+
+# IntelliJ related
+**/*.iml
+**/*.ipr
+**/*.iws
+**/.idea/
+
+# Visual Studio Code related
+# 用 `.vscode/*` 而不是 `.vscode/` —— git 不會進入「整個被 ignore 的資料夾」，
+# 後面的 !.vscode/xxx 例外規則才能生效。
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+# launch.json 可能含 Supabase key / API_BASE_URL，**不可** commit；保留 .example 樣板
+!.vscode/launch.json.example
+
+# Android Studio / Android
+**/android/**/gradle-wrapper.jar
+**/android/.gradle
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/local.properties
+**/android/**/GeneratedPluginRegistrant.java
+**/android/key.properties
+**/*.jks
+**/*.keystore
+
+# iOS / macOS
+**/ios/**/*.mode1v3
+**/ios/**/*.mode2v3
+**/ios/**/*.moved-aside
+**/ios/**/*.pbxuser
+**/ios/**/*.perspectivev3
+**/ios/**/*sync/
+**/ios/**/.sconsign.dblite
+**/ios/**/.tags*
+**/ios/**/.vagrant/
+**/ios/**/DerivedData/
+**/ios/**/Icon?
+**/ios/**/Pods/
+**/ios/**/.symlinks/
+**/ios/**/profile
+**/ios/**/xcuserdata
+**/ios/.generated/
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+# Web (Flutter)
+**/lib/generated_plugin_registrant.dart
+
+# Coverage
+**/coverage/
+
+# =====================================================================
+# Supabase
+# =====================================================================
+# 只 ignore repo 根目錄下的 supabase/，不影響任何巢狀路徑的 supabase 資料夾
+# （開頭斜線 = 「相對於這支 .gitignore 所在的目錄」）
+/supabase/
+
+# Supabase CLI 本地工作目錄（如果未來 supabase/ 沒被整個忽略時也要排除）
+supabase/.branches/
+supabase/.temp/
+
+# =====================================================================
+# OS / editor
+# =====================================================================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temp
+*.tmp
+*.bak
+*.swp
+*~
+
+# =====================================================================
+# Don't ignore example files
+# =====================================================================
+!.env.local.example
+!.env.example

@@ -1,0 +1,37 @@
+name: sigmile_driver
+description: SIGmile driver-side mobile app
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State
+  flutter_riverpod: ^2.5.1
+
+  # Routing
+  go_router: ^14.6.2
+
+  # Supabase
+  supabase_flutter: ^2.8.0
+
+  # Utilities
+  intl: ^0.19.0
+  url_launcher: ^6.3.1
+  http: ^1.2.2
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/logo.png

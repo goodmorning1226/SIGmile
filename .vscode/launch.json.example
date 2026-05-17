@@ -1,0 +1,54 @@
+{
+  "// 使用方式": [
+    "1. 把本檔複製成 .vscode/launch.json（同目錄）",
+    "2. 把 SUPABASE_URL / SUPABASE_ANON_KEY 換成自己 Supabase 專案的值",
+    "3. launch.json 已被 .gitignore，不會 commit 出去"
+  ],
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "driver_app (Web · Chrome)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/apps/driver_app",
+      "program": "lib/main.dart",
+      "deviceId": "chrome",
+      "args": [
+        "--dart-define=SUPABASE_URL=",
+        "--dart-define=SUPABASE_ANON_KEY=",
+        "--dart-define=API_BASE_URL=http://localhost:3000"
+      ]
+    },
+    {
+      "name": "driver_app (Android emulator)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/apps/driver_app",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define=SUPABASE_URL=",
+        "--dart-define=SUPABASE_ANON_KEY=",
+        "--dart-define=API_BASE_URL=http://10.0.2.2:3000"
+      ]
+    },
+    {
+      "name": "driver_app (physical device / WiFi)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/apps/driver_app",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define=SUPABASE_URL=",
+        "--dart-define=SUPABASE_ANON_KEY=",
+        "--dart-define=API_BASE_URL=http://192.168.x.x:3000"
+      ]
+    },
+    {
+      "name": "web (Next.js dev)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/apps/web"
+    }
+  ]
+}

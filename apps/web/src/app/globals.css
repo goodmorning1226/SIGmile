@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { height: 100%; }
+body {
+  background-color: #f8fafc;
+  color: #0f172a;
+  font-feature-settings: "tnum" 1, "cv02" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* monospace for code-ish elements */
+textarea, code, pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* nicer scrollbar in WebKit */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgb(203 213 225); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(148 163 184); }

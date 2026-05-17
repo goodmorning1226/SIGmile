@@ -1,0 +1,25 @@
+{
+    "name": "SIGmile · 物流士端",
+    "short_name": "SIGmile",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#FFFFFF",
+    "theme_color": "#EA580C",
+    "description": "SIGmile 物流配送 · 物流士端，掌握今日配送進度與站點狀態",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "assets/assets/images/logo.png",
+            "sizes": "192x192 512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "assets/assets/images/logo.png",
+            "sizes": "192x192 512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
