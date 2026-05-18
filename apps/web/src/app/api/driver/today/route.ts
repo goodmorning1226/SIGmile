@@ -75,15 +75,44 @@ export async function GET(request: Request) {
       .maybeSingle<TaskRow>();
     if (taskErr) throw taskErr;
 
-    if (!task) {
+    // ★ Dev fallback ★
+    // 找不到「今日」的任務時，若 NODE_ENV != production，自動回**最近一筆**任務，
+    // 讓 demo / 測試階段不用每天 re-seed。Production 仍會回空（行為不變）。
+    let effectiveTask: TaskRow | null = task ?? null;
+    let usedDevFallback = false;
+    if (!effectiveTask && process.env.NODE_ENV !== "production") {
+      const { data: latest, error: latestErr } = await ctx.supabase
+        .from("delivery_tasks")
+        .select(
+          "id, delivery_date, driver_id, driver_route_assignment_id, status, " +
+            "current_stop_id, started_at, completed_at"
+        )
+        .eq("driver_id", ctx.userId)
+        .order("delivery_date", { ascending: false })
+        .limit(1)
+        .maybeSingle<TaskRow>();
+      if (latestErr) throw latestErr;
+      if (latest) {
+        effectiveTask = latest;
+        usedDevFallback = true;
+        console.warn(
+          `[dev-fallback] /api/driver/today: no task for ${todayInTaipei()}, ` +
+            `using latest task ${latest.id} (delivery_date=${latest.delivery_date})`
+        );
+      }
+    }
+
+    if (!effectiveTask) {
       return success({
         task: null,
         stops: [],
         progress: { completed: 0, total: 0 },
         current_stop: null,
-        next_stop: null
+        next_stop: null,
+        dev_fallback: false
       });
     }
+    const task2 = effectiveTask; // rename for readability below
 
     const { data: stopsData, error: stopsErr } = await ctx.supabase
       .from("delivery_task_stops")
@@ -96,7 +125,7 @@ export async function GET(request: Request) {
           "time_window_start, time_window_end, default_service_minutes, " +
           "contact_name, contact_phone, notes)"
       )
-      .eq("delivery_task_id", task.id)
+      .eq("delivery_task_id", task2.id)
       .order("stop_order", { ascending: true })
       .returns<TaskStopRow[]>();
     if (stopsErr) throw stopsErr;
@@ -113,7 +142,7 @@ export async function GET(request: Request) {
     // 之後改 delivery_tasks.current_task_stop_id（FK 到 delivery_task_stops.id）會更精準；
     // 目前 demo 路線沒有重複，先用 stop_id。
     const currentStop =
-      stops.find((s) => s.stop_id === task.current_stop_id) ?? null;
+      stops.find((s) => s.stop_id === task2.current_stop_id) ?? null;
 
     // next_stop = 嚴格在 current 之後（stop_order 較大）且仍未結案的第一筆
     //              若 current 為 null，回第一個未結案的 stop
@@ -122,11 +151,12 @@ export async function GET(request: Request) {
       : stops.find(isOpen) ?? null;
 
     return success({
-      task,
+      task: task2,
       stops,
       progress: { completed, total: stops.length },
       current_stop: currentStop,
-      next_stop: nextStop
+      next_stop: nextStop,
+      dev_fallback: usedDevFallback
     });
   } catch (e) {
     return handleDriverError(e);

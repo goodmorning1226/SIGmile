@@ -39,6 +39,10 @@ dependencies:
   latlong2: ^0.9.1
   permission_handler: ^11.3.1
 
+  # Voice navigation：走系統 TTS（Android TextToSpeech / iOS AVSpeechSynthesizer
+  # / Web SpeechSynthesis），完全免費、不用 API key
+  flutter_tts: ^4.2.0
+
 dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_test:

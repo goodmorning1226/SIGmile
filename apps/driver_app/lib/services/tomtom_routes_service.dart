@@ -227,6 +227,7 @@ class RouteSession {
 /// 文件：https://developer.tomtom.com/routing-api/documentation/tomtom-maps/calculate-route
 class TomTomRoutesService {
   static const _baseUrl = 'https://api.tomtom.com/routing/1/calculateRoute';
+  static const _geocodeUrl = 'https://api.tomtom.com/search/2/geocode';
 
   final String apiKey;
   final http.Client _http;
@@ -236,6 +237,36 @@ class TomTomRoutesService {
         _http = client ?? http.Client();
 
   bool get hasKey => apiKey.isNotEmpty;
+
+  /// 用 TomTom Geocoding API 把地址 / 店名查成精確 lat/lng。
+  /// 失敗（沒 key、API error、找不到）→ null。
+  /// 用途：把 seed 約值座標換成精確門市座標，避免外部 Google Maps 跑偏。
+  Future<({double lat, double lng})?> geocode(String query) async {
+    if (!hasKey || query.trim().isEmpty) return null;
+    try {
+      final encoded = Uri.encodeComponent(query.trim());
+      final uri = Uri.parse(
+        '$_geocodeUrl/$encoded.json?key=$apiKey&limit=1&language=zh-TW',
+      );
+      final res = await _http.get(uri).timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) {
+        debugPrint('[tomtom-geo] HTTP ${res.statusCode}');
+        return null;
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final results = (body['results'] as List?) ?? const [];
+      if (results.isEmpty) return null;
+      final pos = (results.first as Map)['position'] as Map<String, dynamic>?;
+      if (pos == null) return null;
+      final lat = (pos['lat'] as num).toDouble();
+      final lng = (pos['lon'] as num).toDouble();
+      debugPrint('[tomtom-geo] "$query" → $lat, $lng');
+      return (lat: lat, lng: lng);
+    } catch (e) {
+      debugPrint('[tomtom-geo] exception: $e');
+      return null;
+    }
+  }
 
   /// 算從 (fromLat,fromLng) 到 [destination] 的駕車路線。
   /// 失敗（沒 key / API error / 缺座標）→ 直線 fallback。
@@ -249,33 +280,65 @@ class TomTomRoutesService {
     final destLng = destination.lng;
     if (destLat == null || destLng == null) return null;
 
+    return calculateMultiStopRoute(
+      fromLat: fromLat,
+      fromLng: fromLng,
+      stops: [destination],
+    );
+  }
+
+  /// 算從 (fromLat,fromLng) 到 [stops] 依序所有站的路線（單一 polyline 串起所有站）。
+  ///
+  /// TomTom 上限 25 個 waypoints；這裡如果 [stops] 超過就截斷前 25 個。
+  /// 任一個 stop 缺座標 → 直接跳掉。
+  /// 全失敗 → null；API call 失敗但有座標 → 直線 fallback 到最後一站。
+  Future<RouteSession?> calculateMultiStopRoute({
+    required double fromLat,
+    required double fromLng,
+    required List<Stop> stops,
+  }) async {
+    // 過濾沒座標的 + cap 25 個
+    final valid = stops
+        .where((s) => s.lat != null && s.lng != null)
+        .take(25)
+        .toList();
+    if (valid.isEmpty) return null;
+
     if (hasKey) {
-      final real = await _callApi(
+      final real = await _callMultiStopApi(
         fromLat: fromLat,
         fromLng: fromLng,
-        toLat: destLat,
-        toLng: destLng,
+        stops: valid,
       );
       if (real != null) return real;
     }
 
-    // ───── fallback：直線 + Haversine 估算 ─────
+    // fallback：只畫到最後一站的直線
+    final last = valid.last;
     return _straightLineFallback(
       fromLat: fromLat,
       fromLng: fromLng,
-      toLat: destLat,
-      toLng: destLng,
+      toLat: last.lat!,
+      toLng: last.lng!,
     );
   }
 
-  Future<RouteSession?> _callApi({
+  Future<RouteSession?> _callMultiStopApi({
     required double fromLat,
     required double fromLng,
-    required double toLat,
-    required double toLng,
+    required List<Stop> stops,
   }) async {
+    // 串接 TomTom locations 格式：lat0,lng0:lat1,lng1:...:latN,lngN
+    final coords = StringBuffer('$fromLat,$fromLng');
+    for (final s in stops) {
+      coords.write(':${s.lat},${s.lng}');
+    }
+    // 重用 _callApi 但需要支援多 waypoint：拆出共用實作
+    return _callApiRaw(coords.toString());
+  }
+
+  Future<RouteSession?> _callApiRaw(String locations) async {
     try {
-      final locations = '$fromLat,$fromLng:$toLat,$toLng';
       final uri = Uri.parse(
         '$_baseUrl/$locations/json'
         '?key=$apiKey'
