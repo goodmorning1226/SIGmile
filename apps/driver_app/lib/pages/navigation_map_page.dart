@@ -4,19 +4,21 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../app/theme.dart';
+import '../config/env.dart';
 import '../models/delivery_task_stop.dart';
+import '../models/stop.dart';
 import '../providers/service_providers.dart';
 import '../providers/today_task_provider.dart';
 import '../widgets/api_error_view.dart';
 import '../widgets/loading_view.dart';
-import '../widgets/map_placeholder.dart';
 import '../widgets/primary_action_button.dart';
 import '../widgets/stop_status_chip.dart';
+import '../widgets/tomtom_map_view.dart';
 
-/// App 內導航頁：取代過去開啟外部 Google Maps 的行為。
-///   - 顯示地圖佔位（MapPlaceholder）
-///   - 顯示目前要前往的停靠點資訊
-///   - 提供「已抵達」「回報異常」「返回」按鈕
+/// App 內導航頁：
+///   - 上半：[TomTomMapView]（flutter_map + TomTom tile + 路線 polyline + GPS 藍點）
+///   - 下半：站點資訊 + 「已抵達」「外部導航」「回報異常」按鈕
+///   - **抵達自動觸發**：地圖訂閱 GPS，<50m 就呼叫 [_handleArrived]
 class NavigationMapPage extends ConsumerStatefulWidget {
   final String taskStopId;
   const NavigationMapPage({super.key, required this.taskStopId});
@@ -27,8 +29,12 @@ class NavigationMapPage extends ConsumerStatefulWidget {
 
 class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
   bool _arriving = false;
+  bool _autoArrivalHandled = false;
 
-  Future<void> _markArrived() async {
+  Future<void> _handleArrived({bool fromGps = false}) async {
+    if (_autoArrivalHandled && fromGps) return;
+    _autoArrivalHandled = true;
+
     setState(() => _arriving = true);
     final messenger = ScaffoldMessenger.maybeOf(context);
     try {
@@ -37,10 +43,11 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
           .markArrived(widget.taskStopId);
       ref.invalidate(todayBundleProvider);
       if (!mounted) return;
-      // 完成導航後回到 CurrentStopPage，讓 driver 進行「完成配送」步驟
       context.go('/stops/${widget.taskStopId}');
       messenger?.showSnackBar(
-        const SnackBar(content: Text('已標記為抵達')),
+        SnackBar(
+          content: Text(fromGps ? 'GPS 偵測抵達 · 已標記' : '已標記為抵達'),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -73,7 +80,10 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
         data: (bundle) {
           DeliveryTaskStop? ts;
           for (final s in bundle.stops) {
-            if (s.id == widget.taskStopId) { ts = s; break; }
+            if (s.id == widget.taskStopId) {
+              ts = s;
+              break;
+            }
           }
           if (ts == null || ts.stop == null) {
             return const Center(
@@ -89,26 +99,24 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
     );
   }
 
-  Widget _body(BuildContext context, DeliveryTaskStop ts, stop) {
+  Widget _body(BuildContext context, DeliveryTaskStop ts, Stop stop) {
     final etaStr = ts.plannedArrivalAt == null
         ? '—'
         : DateFormat('HH:mm').format(ts.plannedArrivalAt!.toLocal());
 
     return Column(
       children: [
-        // 地圖區（上半）
         Expanded(
           flex: 5,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: MapPlaceholder(
+            child: TomTomMapView(
               stop: stop,
-              etaText: '預計抵達 $etaStr',
+              routesService: ref.watch(tomtomRoutesServiceProvider),
+              onArrived: () => _handleArrived(fromGps: true),
             ),
           ),
         ),
-
-        // 資訊 + 操作（下半）
         Expanded(
           flex: 4,
           child: Container(
@@ -117,7 +125,6 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // stop 資訊
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(14),
@@ -192,14 +199,37 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
                       ),
                     ),
                   ),
-
                   const SizedBox(height: 12),
-
                   PrimaryActionButton(
                     label: '已抵達',
                     icon: Icons.flag_circle,
                     loading: _arriving,
-                    onPressed: ts.isTerminal ? null : _markArrived,
+                    onPressed: ts.isTerminal ? null : () => _handleArrived(),
+                  ),
+                  const SizedBox(height: 10),
+                  // 備援：跳外部 Google Maps app（要 turn-by-turn 語音時用）
+                  OutlinedButton.icon(
+                    onPressed: stop.lat == null
+                        ? null
+                        : () async {
+                            final ok = await ref
+                                .read(externalNavLauncherProvider)
+                                .launchTo(stop);
+                            if (!ok && context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content:
+                                      Text('無法開啟外部 Google Maps（未安裝或座標缺失）'),
+                                ),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('用 Google Maps 開啟（含語音導航）'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: SigmileColors.brand,
+                      side: const BorderSide(color: SigmileColors.brand),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   OutlinedButton.icon(
@@ -214,38 +244,57 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
                     icon: const Icon(Icons.report_problem_outlined),
                     label: const Text('回報異常'),
                   ),
-
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF7ED),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFFED7AA)),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.info_outline,
-                            size: 14, color: SigmileColors.brandDark),
-                        SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            '此導航畫面為佔位，未來會接 Google Maps Navigation SDK 顯示實際即時路線',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: SigmileColors.brandDark,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  _StatusBanner(),
                 ],
               ),
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _StatusBanner extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final hasKey = Env.hasTomTomKey;
+    String text;
+    Color bg;
+    Color fg;
+    IconData icon;
+
+    if (!hasKey) {
+      text = '尚未設定 TOMTOM_API_KEY，地圖會顯示 setup 提示';
+      bg = const Color(0xFFFEF3C7);
+      fg = SigmileColors.brandDark;
+      icon = Icons.key_off;
+    } else {
+      text = '使用 TomTom Maps + Routes API · 抵達 50m 內自動回報';
+      bg = const Color(0xFFDCFCE7);
+      fg = const Color(0xFF166534);
+      icon = Icons.check_circle_outline;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 14, color: fg),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(fontSize: 11, color: fg),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

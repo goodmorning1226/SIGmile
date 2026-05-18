@@ -2,7 +2,11 @@
   "// 使用方式": [
     "1. 把本檔複製成 .vscode/launch.json（同目錄）",
     "2. 把 SUPABASE_URL / SUPABASE_ANON_KEY 換成自己 Supabase 專案的值",
-    "3. launch.json 已被 .gitignore，不會 commit 出去"
+    "3. 啟用 TomTom 導航：",
+    "   - 到 https://developer.tomtom.com/ 註冊（免信用卡，2500 calls/day 免費）",
+    "   - Dashboard → My Credentials → 新增 API key",
+    "   - 把 key 填到 TOMTOM_API_KEY=",
+    "4. launch.json 已被 .gitignore，不會 commit 出去"
   ],
   "version": "0.2.0",
   "configurations": [
@@ -16,7 +20,8 @@
       "args": [
         "--dart-define=SUPABASE_URL=",
         "--dart-define=SUPABASE_ANON_KEY=",
-        "--dart-define=API_BASE_URL=http://localhost:3000"
+        "--dart-define=API_BASE_URL=http://localhost:3000",
+        "--dart-define=TOMTOM_API_KEY="
       ]
     },
     {
@@ -28,7 +33,8 @@
       "args": [
         "--dart-define=SUPABASE_URL=",
         "--dart-define=SUPABASE_ANON_KEY=",
-        "--dart-define=API_BASE_URL=http://10.0.2.2:3000"
+        "--dart-define=API_BASE_URL=http://10.0.2.2:3000",
+        "--dart-define=TOMTOM_API_KEY="
       ]
     },
     {
@@ -40,7 +46,8 @@
       "args": [
         "--dart-define=SUPABASE_URL=",
         "--dart-define=SUPABASE_ANON_KEY=",
-        "--dart-define=API_BASE_URL=http://192.168.x.x:3000"
+        "--dart-define=API_BASE_URL=http://192.168.x.x:3000",
+        "--dart-define=TOMTOM_API_KEY="
       ]
     },
     {

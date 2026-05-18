@@ -181,13 +181,12 @@ class _CurrentStopPageState extends ConsumerState<CurrentStopPage> {
 
         const SizedBox(height: 16),
 
-        // 主要按鈕：開啟 App 內導航頁
+        // 主要按鈕：開啟 App 內導航頁（TomTom 地圖 + 路線）
         PrimaryActionButton(
-          label: '開啟導航',
+          label: '開啟導航（App 內）',
           icon: Icons.navigation,
           loading: _loadingNav,
           onPressed: !canException ? null : () async {
-            // 1) 先呼叫後端把這站標記為 navigating（若還沒）
             if (canMarkNav) {
               await _runAction(
                 () => ref.read(driverTaskServiceProvider)
@@ -197,11 +196,44 @@ class _CurrentStopPageState extends ConsumerState<CurrentStopPage> {
                 setLoading: (v) => setState(() => _loadingNav = v),
               );
             }
-            // 2) push 到 App 內導航地圖頁（未來會接 Google Maps SDK）
             if (context.mounted) {
               context.push('/stops/${ts.id}/navigate');
             }
           },
+        ),
+        const SizedBox(height: 10),
+
+        // 備援：跳外部 Google Maps（要 turn-by-turn 語音導航時用）
+        OutlinedButton.icon(
+          onPressed: !canException || stop?.lat == null
+              ? null
+              : () async {
+                  if (canMarkNav) {
+                    await _runAction(
+                      () => ref.read(driverTaskServiceProvider)
+                          .markNavigating(ts.id),
+                      successMsg: '已開始導航（外部 Google Maps）',
+                      failPrefix: '更新狀態失敗',
+                      setLoading: (v) => setState(() => _loadingNav = v),
+                    );
+                  }
+                  final ok = await ref
+                      .read(externalNavLauncherProvider)
+                      .launchTo(stop!);
+                  if (!ok && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('無法開啟外部地圖（未安裝或座標缺失）'),
+                      ),
+                    );
+                  }
+                },
+          icon: const Icon(Icons.open_in_new),
+          label: const Text('用 Google Maps 開啟（含語音）'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: SigmileColors.brand,
+            side: const BorderSide(color: SigmileColors.brand),
+          ),
         ),
         const SizedBox(height: 10),
 
@@ -269,7 +301,7 @@ class _CurrentStopPageState extends ConsumerState<CurrentStopPage> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '「開啟導航」目前是 placeholder：未來會在這裡呼叫 Google Maps Navigation SDK。',
+                  'App 內導航走 TomTom 地圖 + 路線；要 turn-by-turn 語音用「Google Maps 開啟」按鈕。',
                   style: TextStyle(
                     color: SigmileColors.brandDark,
                     fontSize: 12,

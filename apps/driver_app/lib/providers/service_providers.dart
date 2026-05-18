@@ -6,7 +6,8 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/driver_location_service.dart';
 import '../services/driver_task_service.dart';
-import '../services/navigation_service.dart';
+import '../services/external_navigation_launcher.dart';
+import '../services/tomtom_routes_service.dart';
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   final url = ApiConfig.resolveBaseUrl();
@@ -24,5 +25,12 @@ final driverLocationServiceProvider = Provider<DriverLocationService>((ref) {
   return DriverLocationService(ref.watch(apiClientProvider));
 });
 
-final navigationServiceProvider =
-    Provider<NavigationService>((ref) => MockNavigationService());
+/// TomTom Maps + Routing API。沒設 key 也會建出來（fallback 成直線估算）。
+final tomtomRoutesServiceProvider = Provider<TomTomRoutesService>(
+  (ref) => TomTomRoutesService(),
+);
+
+/// 跳外部地圖 app 的備援抓手（要 turn-by-turn 語音時讓 driver 切過去）。
+final externalNavLauncherProvider = Provider<ExternalNavigationLauncher>(
+  (ref) => ExternalNavigationLauncher(),
+);

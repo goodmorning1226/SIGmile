@@ -26,6 +26,19 @@ dependencies:
   url_launcher: ^6.3.1
   http: ^1.2.2
 
+  # Maps & navigation
+  #   - flutter_map：Leaflet-style 跨平台地圖（Android/iOS/Web/Desktop 全支援）
+  #   - flutter_map_location_marker：自帶藍點 + 跟隨用戶位置
+  #   - geolocator：拿真實 GPS（Web 走 navigator.geolocation；HTTPS / localhost 才行）
+  #   - latlong2：flutter_map 用的 LatLng 型別
+  #   - TomTom Maps tile + Routing API（自由 2500 calls/day，純 REST，不需 native SDK）
+  flutter_map: ^7.0.2
+  flutter_map_location_marker: ^9.1.1
+  geolocator: ^13.0.1
+  geolocator_web: ^4.1.0
+  latlong2: ^0.9.1
+  permission_handler: ^11.3.1
+
 dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_test:
