@@ -15,6 +15,7 @@ class DeliveryTaskStop {
   final String? routeStopId;
   final String stopId;
   final int stopOrder;
+  final int tripIndex; // 一日二配：1 = 第一趟, 2 = 第二趟
   final String status;
   final DateTime? plannedArrivalAt;
   final DateTime? actualArrivalAt;
@@ -30,6 +31,7 @@ class DeliveryTaskStop {
     required this.stopId,
     required this.stopOrder,
     required this.status,
+    this.tripIndex = 1,
     this.routeStopId,
     this.plannedArrivalAt,
     this.actualArrivalAt,
@@ -48,6 +50,7 @@ class DeliveryTaskStop {
       routeStopId: m['route_stop_id'] as String?,
       stopId: m['stop_id'] as String,
       stopOrder: (m['stop_order'] ?? 0) as int,
+      tripIndex: (m['trip_index'] ?? 1) as int,
       status: (m['status'] ?? 'pending') as String,
       plannedArrivalAt: _parseTs(m['planned_arrival_at']),
       actualArrivalAt: _parseTs(m['actual_arrival_at']),

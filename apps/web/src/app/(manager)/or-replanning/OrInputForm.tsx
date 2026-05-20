@@ -4,19 +4,26 @@ import * as React from "react";
 import { Field, FieldGroup } from "@/components/form/Field";
 import { NumberInput } from "@/components/form/NumberInput";
 import { SelectInput } from "@/components/form/SelectInput";
+import { Slider } from "@/components/form/Slider";
 
 export interface OrInputParams {
   service_minutes: { mean: number; p90: number };
   workload: { stops_per_driver_target: number; max_minutes_per_driver: number };
   objective: "minimize_total_minutes" | "minimize_distance" | "balance_load";
   vehicle_capacity_boxes: number;
+  /** 權重（α 配送時間成本、β 派工人力成本）。γ 加班成本由後端寫死，不開放 UI */
+  weights: {
+    alpha_travel_time: number;   // 越大 → 越在意總時間
+    beta_dispatch:     number;   // 越大 → 越想少派人
+  };
 }
 
 export const DEFAULT_OR_INPUT: OrInputParams = {
   service_minutes: { mean: 10, p90: 14 },
   workload: { stops_per_driver_target: 28, max_minutes_per_driver: 480 },
   objective: "minimize_total_minutes",
-  vehicle_capacity_boxes: 60
+  vehicle_capacity_boxes: 60,
+  weights: { alpha_travel_time: 1.0, beta_dispatch: 300.0 }
 };
 
 interface Props {
@@ -31,7 +38,7 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
 
   return (
     <div className="space-y-4">
-      <FieldGroup title="服務時間估算" description="OR 引擎排程時使用的平均服務時間">
+      <FieldGroup title="服務時間估算" description="OR 排程時用的平均服務時間">
         <Field label="平均服務時間" suffix="分鐘">
           <NumberInput
             value={value.service_minutes.mean}
@@ -48,7 +55,7 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
         </Field>
       </FieldGroup>
 
-      <FieldGroup title="員工負荷限制" description="排程時每位物流士的工作量上限">
+      <FieldGroup title="員工負荷限制" description="每位物流士的工作量上限">
         <Field label="每人目標站數" suffix="站">
           <NumberInput
             value={value.workload.stops_per_driver_target}
@@ -86,13 +93,41 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
           />
         </Field>
       </FieldGroup>
+
+      <FieldGroup title="成本權重" description="拖動滑桿調整不同成本在優化中的相對重要性">
+        <Field
+          label="配送時間成本"
+          hint="數字越大 → 更傾向縮短總配送時間（包含行駛+服務）"
+          className="sm:col-span-2"
+        >
+          <Slider
+            value={value.weights.alpha_travel_time}
+            onChange={(n) => set("weights", { ...value.weights, alpha_travel_time: n })}
+            min={0} max={5} step={0.1}
+            disabled={readOnly}
+            suffix="元/分鐘"
+          />
+        </Field>
+        <Field
+          label="派工成本"
+          hint="數字越大 → 更傾向減少出動的物流士人數"
+          className="sm:col-span-2"
+        >
+          <Slider
+            value={value.weights.beta_dispatch}
+            onChange={(n) => set("weights", { ...value.weights, beta_dispatch: n })}
+            min={0} max={1000} step={10}
+            disabled={readOnly}
+            suffix="元/人"
+          />
+        </Field>
+      </FieldGroup>
     </div>
   );
 }
 
 /**
- * 將任意 JSON 物件（可能來自 DB 的舊資料）解析成 OrInputParams，
- * 缺欄位用 default 補。這樣 UI 不會被舊資料的格式差異弄壞。
+ * 把任意 JSON 物件（可能來自舊版 DB）解析成 OrInputParams，缺欄位用 default 補。
  */
 export function parseOrInputParams(raw: unknown): OrInputParams {
   const r = (raw ?? {}) as Record<string, any>;
@@ -113,7 +148,15 @@ export function parseOrInputParams(raw: unknown): OrInputParams {
                  .includes(r?.objective) ? r.objective : "minimize_total_minutes"),
     vehicle_capacity_boxes: Number(
       r?.vehicle_capacity_boxes ?? DEFAULT_OR_INPUT.vehicle_capacity_boxes
-    )
+    ),
+    weights: {
+      alpha_travel_time: Number(
+        r?.weights?.alpha_travel_time ?? DEFAULT_OR_INPUT.weights.alpha_travel_time
+      ),
+      beta_dispatch: Number(
+        r?.weights?.beta_dispatch ?? DEFAULT_OR_INPUT.weights.beta_dispatch
+      )
+    }
   };
 }
 

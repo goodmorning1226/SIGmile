@@ -10,11 +10,12 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // 啟動時印出環境變數，方便在 DEBUG CONSOLE 確認是否吃到 --dart-define
-  // ignore: avoid_print
   debugPrint('[env] SUPABASE_URL=${Env.supabaseUrl.isEmpty ? "(empty)" : Env.supabaseUrl}');
   debugPrint('[env] SUPABASE_ANON_KEY='
       '${Env.supabaseAnonKey.isEmpty ? "(empty)" : "(${Env.supabaseAnonKey.length} chars)"}');
-  debugPrint('[env] API_BASE_URL=${Env.apiBaseUrl.isEmpty ? "(default 10.0.2.2:3000)" : Env.apiBaseUrl}');
+  debugPrint('[env] API_BASE_URL=${Env.apiBaseUrl.isEmpty ? "(auto by platform)" : Env.apiBaseUrl}');
+  debugPrint('[env] TOMTOM_API_KEY='
+      '${Env.tomtomApiKey.isEmpty ? "(empty — 地圖會 fallback 成直線估算)" : "(${Env.tomtomApiKey.length} chars)"}');
 
   if (!Env.isConfigured) {
     runApp(const _ConfigErrorApp());

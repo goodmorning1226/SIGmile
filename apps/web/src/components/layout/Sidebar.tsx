@@ -3,18 +3,38 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Truck, Send, History, Sparkles, LogOut
+  LayoutDashboard, Truck, Send, History, Sparkles, LogOut, Layers, Users
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
-const NAV = [
-  { href: "/dashboard",      label: "今日總覽",   icon: LayoutDashboard },
-  { href: "/drivers",        label: "物流士",     icon: Truck },
-  { href: "/or-replanning",  label: "發布新路線", icon: Send },
-  { href: "/route-planning", label: "路線歷史",   icon: History },
-  { href: "/ai-analysis",    label: "AI 分析",    icon: Sparkles }
-] as const;
+interface NavItem { href: string; label: string; icon: typeof LayoutDashboard; }
+interface NavGroup { title: string; items: readonly NavItem[]; }
+
+const NAV: readonly NavGroup[] = [
+  {
+    title: "營運",
+    items: [
+      { href: "/dashboard", label: "今日總覽", icon: LayoutDashboard },
+      { href: "/drivers",   label: "物流士",   icon: Truck }
+    ]
+  },
+  {
+    title: "路線管理",
+    items: [
+      { href: "/or-replanning", label: "發布新路線", icon: Send },
+      { href: "/clusters",      label: "停靠點分群", icon: Layers },
+      { href: "/assignment",    label: "物流士分配", icon: Users },
+      { href: "/route-planning", label: "路線歷史",   icon: History }
+    ]
+  },
+  {
+    title: "分析",
+    items: [
+      { href: "/ai-analysis", label: "AI 分析", icon: Sparkles }
+    ]
+  }
+];
 
 export function Sidebar({ userName }: { userName: string }) {
   const pathname = usePathname();
@@ -45,33 +65,37 @@ export function Sidebar({ userName }: { userName: string }) {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4">
-        <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-          營運
-        </div>
-        <ul className="space-y-1">
-          {NAV.map((item) => {
-            const active =
-              pathname === item.href || pathname.startsWith(item.href + "/");
-            const Icon = item.icon;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    "group flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                    active
-                      ? "bg-brand-50 text-brand-700"
-                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                  )}
-                >
-                  <Icon className={cn("h-4 w-4", active ? "text-brand-600" : "text-slate-400 group-hover:text-slate-600")} />
-                  {item.label}
-                  {active && <span className="ml-auto size-1.5 rounded-full bg-brand-600" />}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+        {NAV.map((group, gi) => (
+          <div key={group.title} className={gi === 0 ? "" : "mt-5"}>
+            <div className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              {group.title}
+            </div>
+            <ul className="space-y-1">
+              {group.items.map((item) => {
+                const active =
+                  pathname === item.href || pathname.startsWith(item.href + "/");
+                const Icon = item.icon;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={cn(
+                        "group flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                        active
+                          ? "bg-brand-50 text-brand-700"
+                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                      )}
+                    >
+                      <Icon className={cn("h-4 w-4", active ? "text-brand-600" : "text-slate-400 group-hover:text-slate-600")} />
+                      {item.label}
+                      {active && <span className="ml-auto size-1.5 rounded-full bg-brand-600" />}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
       {/* User */}

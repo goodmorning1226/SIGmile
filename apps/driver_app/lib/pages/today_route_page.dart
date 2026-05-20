@@ -269,13 +269,38 @@ class TodayRoutePage extends ConsumerWidget {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      stop?.name ?? '(未命名)',
-                      style: TextStyle(
-                        fontSize: compact ? 15 : 17,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            stop?.name ?? '(未命名)',
+                            style: TextStyle(
+                              fontSize: compact ? 15 : 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (ts.tripIndex >= 2) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDBEAFE),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '第 ${ts.tripIndex} 趟',
+                              style: const TextStyle(
+                                color: Color(0xFF1D4ED8),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                   StopStatusChip(status: ts.status),

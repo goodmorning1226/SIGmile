@@ -1,10 +1,13 @@
-import { Sliders, RefreshCw, Info } from "lucide-react";
+import { Sliders, RefreshCw, Database, Info } from "lucide-react";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { OrJobList } from "./OrJobList";
 import { CreateJobPanel } from "./CreateJobPanel";
+import { StopsExcelPanel } from "./StopsExcelPanel";
+import { PythonHookPanel } from "./PythonHookPanel";
 import { ParameterCard, type PredictionRow } from "../parameters/ParameterCard";
 import { GeneratePanel } from "../parameters/GeneratePanel";
 
@@ -52,7 +55,6 @@ export default async function PublishRoutePage() {
     .limit(20)
     .returns<JobRow[]>();
 
-  // 只列當前 period 的試算任務
   const periodJobs = activePeriod
     ? (jobs ?? []).filter((j) => j.planning_period_id === activePeriod.id)
     : [];
@@ -68,11 +70,17 @@ export default async function PublishRoutePage() {
 
   const predictions = (paramsRows ?? []) as PredictionRow[];
 
+  // 停靠點數
+  const { count: stopCount } = await admin
+    .from("stops")
+    .select("id", { count: "exact", head: true })
+    .eq("is_active", true);
+
   return (
     <>
       <PageHeader
         title="發布新路線"
-        description="設定規劃參數、試算最佳路線、一鍵採用並發布給物流士"
+        description="設定規劃參數、試算最佳路線、預覽結果並決定採用為草稿或直接發布"
         actions={
           activePeriod ? (
             <CreateJobPanel
@@ -102,9 +110,20 @@ export default async function PublishRoutePage() {
               <div className="text-sm text-slate-700">
                 <div className="font-semibold text-slate-900">建議流程</div>
                 <ol className="mt-1.5 space-y-0.5 list-decimal pl-5 text-slate-600">
-                  <li>確認下方「規劃參數」是否合理，可微調</li>
-                  <li>右上「建立新試算任務」→ 系統會用最新參數產生試算結果</li>
-                  <li>展開試算結果檢視，按「採用此結果」即建立新草稿；按「採用並發布」會立即發布給物流士</li>
+                  <li>「停靠點資料」確認是最新的（可用 Excel 匯入匯出）</li>
+                  <li>「規劃參數」微調權重與限制</li>
+                  <li>右上「建立新規劃任務」→ 系統試算 → 在卡片裡按「試算」</li>
+                  <li>
+                    試算完成 → 到{" "}
+                    <Link href="/clusters" className="text-brand-600 hover:underline">
+                      停靠點分群
+                    </Link>{" "}
+                    /{" "}
+                    <Link href="/assignment" className="text-brand-600 hover:underline">
+                      物流士分配
+                    </Link>{" "}
+                    微調 → 或直接按「採用此結果」存草稿、「採用並發布」立即發布
+                  </li>
                 </ol>
                 <div className="mt-2 text-xs text-slate-500">
                   目前期間：{activePeriod.code} · {activePeriod.name}
@@ -113,7 +132,23 @@ export default async function PublishRoutePage() {
             </CardContent>
           </Card>
 
-          {/* 規劃參數 section */}
+          {/* 步驟 0：停靠點資料 */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Database className="size-4 text-brand-500" />
+                <CardTitle>步驟 0 · 停靠點資料</CardTitle>
+              </div>
+              <CardDescription>
+                試算所需的所有停靠點資料。可下載 Excel 修改門市清單 / 時窗 / 貨量等後上傳灌回。
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <StopsExcelPanel totalStops={stopCount ?? 0} />
+            </CardContent>
+          </Card>
+
+          {/* 步驟 1：規劃參數 */}
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
@@ -127,8 +162,8 @@ export default async function PublishRoutePage() {
                 />
               </div>
               <CardDescription>
-                這些參數會被「試算」用來決定每位物流士的目標站數、各門市平均停留時間等。
-                數值由系統自動預測，可手動調整以符合實際運作。
+                各類預測參數（服務時間、員工負荷、風險區域等）。
+                試算時會被使用，可手動調整。
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -146,21 +181,25 @@ export default async function PublishRoutePage() {
             </CardContent>
           </Card>
 
-          {/* 試算 section */}
+          {/* 步驟 2：試算任務 */}
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
                 <RefreshCw className="size-4 text-brand-500" />
-                <CardTitle>步驟 2 · 試算路線</CardTitle>
+                <CardTitle>步驟 2 · 試算與結果預覽</CardTitle>
               </div>
               <CardDescription>
                 每筆任務代表一次試算。可以建立多筆比較不同條件，再選一個結果採用。
+                採用後會建立新版「草稿」，到「停靠點分群」/「物流士分配」可繼續微調。
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <OrJobList jobs={periodJobs} />
             </CardContent>
           </Card>
+
+          {/* Python 接點說明 */}
+          <PythonHookPanel />
         </div>
       )}
     </>

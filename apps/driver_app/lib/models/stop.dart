@@ -13,6 +13,14 @@ class Stop {
   final String? contactPhone;
   final String? notes;
 
+  // Phase 2 OR-aligned
+  final String? city;
+  final String? district;
+  final int? avgDeliveryVolume;
+  final String? temperatureType; // 'frozen' | 'chilled' | 'mixed' | 'ambient'
+  final String? specialVehicleRequirement;
+  final String? shift; // 'day' | 'night'
+
   const Stop({
     required this.id,
     required this.name,
@@ -27,6 +35,12 @@ class Stop {
     this.contactName,
     this.contactPhone,
     this.notes,
+    this.city,
+    this.district,
+    this.avgDeliveryVolume,
+    this.temperatureType,
+    this.specialVehicleRequirement,
+    this.shift,
   });
 
   factory Stop.fromMap(Map<String, dynamic> m) => Stop(
@@ -43,5 +57,11 @@ class Stop {
         contactName: m['contact_name'] as String?,
         contactPhone: m['contact_phone'] as String?,
         notes: m['notes'] as String?,
+        city: m['city'] as String?,
+        district: m['district'] as String?,
+        avgDeliveryVolume: m['avg_delivery_volume'] as int?,
+        temperatureType: m['temperature_type'] as String?,
+        specialVehicleRequirement: m['special_vehicle_requirement'] as String?,
+        shift: m['shift'] as String?,
       );
 }

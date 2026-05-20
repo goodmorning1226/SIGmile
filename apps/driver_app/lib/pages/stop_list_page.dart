@@ -35,6 +35,21 @@ class StopListPage extends ConsumerWidget {
             );
           }
           final stops = bundle.stops;
+          final hasMultipleTrips = stops.any((s) => s.tripIndex >= 2);
+
+          // 把 header + trip 分隔線 + stops 平鋪成 widget list
+          final items = <Widget>[];
+          items.add(_header(bundle));
+          int? lastTrip;
+          for (final s in stops) {
+            if (hasMultipleTrips && s.tripIndex != lastTrip) {
+              items.add(_TripDivider(tripIndex: s.tripIndex));
+              lastTrip = s.tripIndex;
+            }
+            final isCurrent = s.stopId == bundle.task?.currentStopId;
+            items.add(_StopTile(stop: s, highlight: isCurrent));
+          }
+
           return RefreshIndicator(
             onRefresh: () async {
               ref.invalidate(todayBundleProvider);
@@ -42,14 +57,9 @@ class StopListPage extends ConsumerWidget {
             },
             child: ListView.separated(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-              itemCount: stops.length + 1,
+              itemCount: items.length,
               separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (context, idx) {
-                if (idx == 0) return _header(bundle);
-                final s = stops[idx - 1];
-                final isCurrent = s.stopId == bundle.task?.currentStopId;
-                return _StopTile(stop: s, highlight: isCurrent);
-              },
+              itemBuilder: (context, idx) => items[idx],
             ),
           );
         },
@@ -88,6 +98,45 @@ class StopListPage extends ConsumerWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TripDivider extends StatelessWidget {
+  final int tripIndex;
+  const _TripDivider({required this.tripIndex});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = tripIndex == 1 ? '第 1 趟（上午）' : '第 $tripIndex 趟';
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 2),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: SigmileColors.brand,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Divider(
+              color: SigmileColors.cardBorder,
+              thickness: 1,
             ),
           ),
         ],
