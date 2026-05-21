@@ -66,9 +66,18 @@ interface TaskStopRow {
   stop_id: string;
   stop_order: number;
   status: string;
-  estimated_service_minutes: number | null;
-  estimated_volume: number | null;
-  stop: { lat: number | null; lng: number | null } | { lat: number | null; lng: number | null }[] | null;
+  // delivery_task_stops 自身沒有預估欄位；用 stops 主檔上的 default_service_minutes / avg_delivery_volume 推算
+  stop: {
+    lat: number | null;
+    lng: number | null;
+    default_service_minutes: number | null;
+    avg_delivery_volume: number | null;
+  } | Array<{
+    lat: number | null;
+    lng: number | null;
+    default_service_minutes: number | null;
+    avg_delivery_volume: number | null;
+  }> | null;
 }
 
 function pickFirst<T>(v: T | T[] | null | undefined): T | null {
@@ -249,8 +258,7 @@ export async function suggestUrgentDispatch(urgentId: string): Promise<{
       .from("delivery_task_stops")
       .select(
         "id, delivery_task_id, stop_id, stop_order, status, " +
-          "estimated_service_minutes, estimated_volume, " +
-          "stop:stops(lat, lng)"
+          "stop:stops(lat, lng, default_service_minutes, avg_delivery_volume)"
       )
       .in("delivery_task_id", taskIds)
       .order("stop_order", { ascending: true })
@@ -281,8 +289,11 @@ export async function suggestUrgentDispatch(urgentId: string): Promise<{
 
     const distKm = haversineMeters(lastPos, { lat: u.lat, lng: u.lng }) / 1000;
 
-    // 容量分析
-    const usedBoxes = ownStops.reduce((s, x) => s + (x.estimated_volume ?? 0), 0);
+    // 容量分析（從 stops 主檔的 avg_delivery_volume 推算）
+    const usedBoxes = ownStops.reduce((s, x) => {
+      const sm = pickFirst(x.stop);
+      return s + (sm?.avg_delivery_volume ?? 0);
+    }, 0);
     const totalCap = d.vehicle_capacity ?? 60;
     const remaining = Math.max(0, totalCap - usedBoxes);
     const remainingRatio = remaining / Math.max(1, totalCap);
@@ -451,6 +462,8 @@ export async function applyUrgentDispatch(
   // 真正最佳位置 UI 已經算給主管看；如果未來要把它變成 cheapest-insertion 的位置，
   // 需要 reorder 整個 task 的 stop_order，那是 phase 2
   const plannedAt = new Date();
+  // delivery_task_stops 只有基本欄位（schema 不存 estimated_*）；
+  // 預估服務時間 / 貨量這些屬於 stops 主檔 + urgent_shipments，需要時 join 取得。
   const { data: inserted, error: insErr } = await admin
     .from("delivery_task_stops")
     .insert({
@@ -459,9 +472,7 @@ export async function applyUrgentDispatch(
       stop_order: nextOrder,
       status: "pending",
       planned_arrival_at: plannedAt.toISOString(),
-      trip_index: 1, // 急件不分趟，直接放第 1 趟尾
-      estimated_service_minutes: 10,
-      estimated_volume: u.demand_boxes
+      trip_index: 1 // 急件不分趟，直接放第 1 趟尾
     })
     .select("id")
     .single<{ id: string }>();
