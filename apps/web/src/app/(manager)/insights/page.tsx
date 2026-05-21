@@ -1,4 +1,4 @@
-import { Sparkles, History } from "lucide-react";
+import { Sparkles, History, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -14,12 +14,20 @@ export default function InsightsPage() {
         title="AI 深度分析"
         description="比 dashboard 更深一層：找出時段瓶頸、物流士 outlier、門市異常熱點、可直接行動的建議。"
         actions={
-          <Link href="/ai-analysis">
-            <Button variant="outline">
-              <History className="size-4" />
-              歷史紀錄
-            </Button>
-          </Link>
+          <div className="flex gap-2">
+            <Link href="/ai-assistant">
+              <Button>
+                <MessageSquare className="size-4" />
+                問 AI 助理
+              </Button>
+            </Link>
+            <Link href="/ai-analysis">
+              <Button variant="outline">
+                <History className="size-4" />
+                歷史紀錄
+              </Button>
+            </Link>
+          </div>
         }
       />
 

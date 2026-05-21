@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Truck, Send, History, Sparkles, LogOut, Layers, Users,
-  Zap, LifeBuoy, Beaker, BrainCircuit
+  Zap, LifeBuoy, Beaker, BrainCircuit, MessageSquare
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -39,8 +39,9 @@ const NAV: readonly NavGroup[] = [
   {
     title: "AI 分析",
     items: [
-      { href: "/insights",    label: "AI 深度分析", icon: BrainCircuit },
-      { href: "/ai-analysis", label: "歷史紀錄",    icon: Sparkles }
+      { href: "/ai-assistant", label: "AI 助理",     icon: MessageSquare },
+      { href: "/insights",     label: "AI 深度分析", icon: BrainCircuit },
+      { href: "/ai-analysis",  label: "歷史紀錄",    icon: Sparkles }
     ]
   },
   {
