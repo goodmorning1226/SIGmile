@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Truck, Send, History, Sparkles, LogOut, Layers, Users
+  LayoutDashboard, Truck, Send, History, Sparkles, LogOut, Layers, Users,
+  Zap, LifeBuoy, Beaker, BrainCircuit
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -20,6 +21,13 @@ const NAV: readonly NavGroup[] = [
     ]
   },
   {
+    title: "即時應變",
+    items: [
+      { href: "/urgent",    label: "急件派遣", icon: Zap },
+      { href: "/emergency", label: "緊急應變", icon: LifeBuoy }
+    ]
+  },
+  {
     title: "路線管理",
     items: [
       { href: "/or-replanning", label: "發布新路線", icon: Send },
@@ -29,9 +37,16 @@ const NAV: readonly NavGroup[] = [
     ]
   },
   {
-    title: "分析",
+    title: "AI 分析",
     items: [
-      { href: "/ai-analysis", label: "AI 分析", icon: Sparkles }
+      { href: "/insights",    label: "AI 深度分析", icon: BrainCircuit },
+      { href: "/ai-analysis", label: "歷史紀錄",    icon: Sparkles }
+    ]
+  },
+  {
+    title: "開發者",
+    items: [
+      { href: "/or-test",     label: "OR 演算法測試", icon: Beaker }
     ]
   }
 ];

@@ -183,8 +183,9 @@ export default async function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-2">
-              <QuickAction href="/drivers" label="查看物流士進度" hint="所有人員狀態與目前站" />
-              <QuickAction href="/route-planning" label="路線歷史" hint="檢視過去路線版本" />
+              <QuickAction href="/insights" label="AI 深度分析" hint="找瓶頸時段 / outlier / 異常熱點" />
+              <QuickAction href="/urgent" label="急件派遣" hint="AI 推薦最適物流士" />
+              <QuickAction href="/emergency" label="緊急應變" hint="物流士翹班自動重派" />
               <QuickAction href="/or-replanning" label="發布新路線" hint="試算並採用新路線" />
             </CardContent>
           </Card>
