@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Truck, Send, History, Sparkles, LogOut, Layers, Users,
-  Zap, LifeBuoy, Beaker, BrainCircuit, MessageSquare
+  LayoutDashboard, Truck, Send, History, LogOut, Layers,
+  Zap, LifeBuoy, BrainCircuit, CalendarDays
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -30,24 +30,16 @@ const NAV: readonly NavGroup[] = [
   {
     title: "路線管理",
     items: [
-      { href: "/or-replanning", label: "發布新路線", icon: Send },
-      { href: "/clusters",      label: "路線集",     icon: Layers },
-      { href: "/assignment",    label: "物流士分配", icon: Users },
+      { href: "/or-replanning",  label: "發布新路線", icon: Send },
+      { href: "/clusters",       label: "路線分配",   icon: Layers },
       { href: "/route-planning", label: "路線歷史",   icon: History }
     ]
   },
   {
-    title: "AI 分析",
+    title: "分析",
     items: [
-      { href: "/ai-assistant", label: "AI 助理",     icon: MessageSquare },
-      { href: "/insights",     label: "AI 深度分析", icon: BrainCircuit },
-      { href: "/ai-analysis",  label: "歷史紀錄",    icon: Sparkles }
-    ]
-  },
-  {
-    title: "開發者",
-    items: [
-      { href: "/or-test",     label: "OR 演算法測試", icon: Beaker }
+      { href: "/insights",            label: "AI 深度分析", icon: BrainCircuit },
+      { href: "/quarterly-analysis",  label: "季度分析",   icon: CalendarDays }
     ]
   }
 ];

@@ -12,7 +12,7 @@ import {
   DraftPublishBanner,
   type PlanTabKey
 } from "@/components/route-planning/PlanTabsSelector";
-import { ClusterEditor } from "./ClusterEditor";
+import { RouteAssignmentBoard } from "./RouteAssignmentBoard";
 
 export const dynamic = "force-dynamic";
 
@@ -28,8 +28,8 @@ export default async function ClustersPage({ searchParams }: PageProps) {
     return (
       <>
         <PageHeader
-          title="路線集"
-          description="OR 跑完後的路線集合，每個路線集包含停靠點順序與指派的物流士"
+          title="路線分配"
+          description="檢視 OR 跑出來的路線，調整站點順序、跨路線移動、指派物流士"
         />
         <Card>
           <CardContent className="py-12 text-center text-sm text-slate-500">
@@ -58,8 +58,8 @@ export default async function ClustersPage({ searchParams }: PageProps) {
   return (
     <>
       <PageHeader
-        title="路線集"
-        description="OR 跑完後產生的路線集合。每個路線集對應一條物流士當天要跑的路線（含停靠順序）。"
+        title="路線分配"
+        description="檢視 OR 跑出來的路線。拖曳停靠點調順序、點擊停靠點可移到其他路線、右側下拉指派物流士。站與站之間的數字是 cache 中的行車分鐘數。"
       />
 
       <Card className="mb-6">
@@ -89,7 +89,7 @@ export default async function ClustersPage({ searchParams }: PageProps) {
           ) : (
             <DraftPublishBanner planId={plan.id} version={plan.version} />
           )}
-          <ClusterEditor plan={plan} readOnly={isPublishedView} />
+          <RouteAssignmentBoard plan={plan} readOnly={isPublishedView} />
         </div>
       )}
     </>

@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getOrComputeCachedMatrix } from "@/lib/services/duration-matrix-cache-service";
 
 /**
  * 「停靠點分群」資料模型 helper。
@@ -45,6 +46,21 @@ export interface ClusterRow {
   stops: ClusterStop[];
 }
 
+export interface DriverOption {
+  id: string;
+  full_name: string;
+  employee_code: string | null;
+  shift: string | null;
+  vehicle_capacity: number | null;
+  temperature_capability: string | null;
+}
+
+export interface TravelTimeEntry {
+  from_id: string;
+  to_id: string;
+  duration_minutes: number;
+}
+
 export interface PlanForEdit {
   id: string;
   planning_period_id: string;
@@ -52,8 +68,11 @@ export interface PlanForEdit {
   status: string;           // draft / published / archived
   source: string;
   notes: string | null;
+  depot_id: string | null;
   clusters: ClusterRow[];
   unclustered_stops: ClusterStop[]; // route_stops 沒被歸到任何 cluster
+  drivers: DriverOption[];          // 可分配的 driver 主檔
+  travel_times: TravelTimeEntry[];  // 任何 depot ↔ stop / stop ↔ stop 的 cache 值
 }
 
 interface RawRouteStop {
@@ -114,9 +133,8 @@ export async function getPlanForEdit(planId: string): Promise<PlanForEdit | null
     required_temperature: string | null;
   }
 
-  // ★ 三個 query 同時下：plan info、clusters、DRA IDs。
-  //   原本是 sequential (plan → clusters → dra → route_stops)，現在前 3 個 parallel。
-  const [planRes, clustersRes, draRes] = await Promise.all([
+  // ★ 五個 query 同時下：plan info、clusters、DRA IDs、drivers、planning_periods.dc
+  const [planRes, clustersRes, draRes, driversRes] = await Promise.all([
     admin
       .from("route_plans")
       .select("id, planning_period_id, version, status, source, notes")
@@ -137,13 +155,21 @@ export async function getPlanForEdit(planId: string): Promise<PlanForEdit | null
       .from("driver_route_assignments")
       .select("id")
       .eq("route_plan_id", planId)
-      .returns<{ id: string }[]>()
+      .returns<{ id: string }[]>(),
+    admin
+      .from("profiles")
+      .select("id, full_name, employee_code, shift, vehicle_capacity, temperature_capability")
+      .eq("role", "driver")
+      .eq("is_active", true)
+      .order("employee_code", { ascending: true })
+      .returns<DriverOption[]>()
   ]);
 
   const plan = planRes.data;
   if (!plan) return null;
   const clusters = clustersRes.data;
   const draRows = draRes.data;
+  const drivers = driversRes.data ?? [];
 
   const clusterById = new Map<string, ClusterRow>();
   for (const c of clusters ?? []) {
@@ -175,6 +201,108 @@ export async function getPlanForEdit(planId: string): Promise<PlanForEdit | null
     }
   }
 
+  // ---- 拿 depot id + travel time cache ----
+  let depotId: string | null = null;
+  const { data: period } = await admin
+    .from("planning_periods")
+    .select("distribution_center_id")
+    .eq("id", plan.planning_period_id)
+    .maybeSingle<{ distribution_center_id: string | null }>();
+  depotId = period?.distribution_center_id ?? null;
+
+  // 把 cluster.stops 重排好順序（trip 1 stops 後接 trip 2 stops），用來算「實際路線需要的 pair」
+  const allStopIds = Array.from(clusterById.values())
+    .flatMap((c) => c.stops.map((s) => s.stop_id))
+    .concat(unclustered.map((s) => s.stop_id));
+  const nodeIds = depotId ? [depotId, ...allStopIds] : allStopIds;
+  let travelTimes: TravelTimeEntry[] = [];
+
+  if (nodeIds.length >= 2) {
+    // ---- 1) 先查現有 cache ----
+    const { data: ttc } = await admin
+      .from("travel_time_cache")
+      .select("from_id, to_id, duration_minutes")
+      .in("from_id", nodeIds)
+      .in("to_id", nodeIds)
+      .returns<TravelTimeEntry[]>();
+    travelTimes = ttc ?? [];
+
+    // ---- 2) 計算「實際路線會用到的 pair」是否齊全 ----
+    //   每條路線：depot → trip1 stops → depot → trip2 stops → depot
+    const needed = new Set<string>();
+    for (const c of clusterById.values()) {
+      const trip1 = c.stops
+        .filter((s) => (s.trip_index ?? 1) === 1)
+        .map((s) => s.stop_id);
+      const trip2 = c.stops
+        .filter((s) => s.trip_index === 2)
+        .map((s) => s.stop_id);
+      const addArc = (a: string, b: string) => {
+        if (a !== b) needed.add(`${a}>${b}`);
+      };
+      const addChain = (chain: string[]) => {
+        for (let i = 0; i < chain.length - 1; i++) addArc(chain[i], chain[i + 1]);
+      };
+      if (depotId) {
+        if (trip1.length > 0) addChain([depotId, ...trip1, depotId]);
+        if (trip2.length > 0) addChain([depotId, ...trip2, depotId]);
+      } else {
+        addChain(c.stops.map((s) => s.stop_id));
+      }
+    }
+    const have = new Set(travelTimes.map((t) => `${t.from_id}>${t.to_id}`));
+    const missing = Array.from(needed).filter((k) => !have.has(k));
+
+    // ---- 3) 缺漏的 pair 用 cache service 補（先 cache，cache miss 才打 TomTom）----
+    if (missing.length > 0) {
+      // 找這些 stop / depot 對應的 lat/lng
+      const idToLatLng = new Map<string, { lat: number; lng: number }>();
+      const { data: stopsLatLng } = await admin
+        .from("stops")
+        .select("id, lat, lng")
+        .in("id", nodeIds);
+      for (const s of (stopsLatLng ?? []) as { id: string; lat: number | null; lng: number | null }[]) {
+        if (s.lat != null && s.lng != null) {
+          idToLatLng.set(s.id, { lat: Number(s.lat), lng: Number(s.lng) });
+        }
+      }
+      if (depotId) {
+        const { data: dc } = await admin
+          .from("distribution_centers")
+          .select("id, lat, lng")
+          .eq("id", depotId)
+          .maybeSingle<{ id: string; lat: number | null; lng: number | null }>();
+        if (dc?.lat != null && dc?.lng != null) {
+          idToLatLng.set(dc.id, { lat: Number(dc.lat), lng: Number(dc.lng) });
+        }
+      }
+      // 收集缺漏 pair 涉及到的所有節點
+      const involvedIds = new Set<string>();
+      for (const k of missing) {
+        const [a, b] = k.split(">");
+        involvedIds.add(a); involvedIds.add(b);
+      }
+      const nodesForMatrix = Array.from(involvedIds)
+        .map((id) => {
+          const ll = idToLatLng.get(id);
+          return ll ? { id, lat: ll.lat, lng: ll.lng } : null;
+        })
+        .filter((x): x is { id: string; lat: number; lng: number } => x !== null);
+
+      if (nodesForMatrix.length >= 2) {
+        await getOrComputeCachedMatrix(nodesForMatrix);
+        // 補完後重新撈，得到完整 travel_times
+        const { data: ttc2 } = await admin
+          .from("travel_time_cache")
+          .select("from_id, to_id, duration_minutes")
+          .in("from_id", nodeIds)
+          .in("to_id", nodeIds)
+          .returns<TravelTimeEntry[]>();
+        travelTimes = ttc2 ?? travelTimes;
+      }
+    }
+  }
+
   return {
     id: plan.id,
     planning_period_id: plan.planning_period_id,
@@ -182,8 +310,11 @@ export async function getPlanForEdit(planId: string): Promise<PlanForEdit | null
     status: plan.status,
     source: plan.source,
     notes: plan.notes,
+    depot_id: depotId,
     clusters: Array.from(clusterById.values()),
-    unclustered_stops: unclustered
+    unclustered_stops: unclustered,
+    drivers,
+    travel_times: travelTimes
   };
 }
 

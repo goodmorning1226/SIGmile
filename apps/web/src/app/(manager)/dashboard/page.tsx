@@ -183,8 +183,8 @@ export default async function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-2">
-              <QuickAction href="/ai-assistant" label="問 AI 助理" hint="人話描述 → AI 給可執行行動卡" />
               <QuickAction href="/insights" label="AI 深度分析" hint="找瓶頸時段 / outlier / 異常熱點" />
+              <QuickAction href="/quarterly-analysis" label="季度分析" hint="跨季 KPI 與趨勢比較" />
               <QuickAction href="/urgent" label="急件派遣" hint="AI 推薦最適物流士" />
               <QuickAction href="/emergency" label="緊急應變" hint="物流士翹班自動重派" />
             </CardContent>
