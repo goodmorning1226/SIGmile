@@ -101,13 +101,6 @@ function mapStop(r: RawRouteStop): ClusterStop {
 export async function getPlanForEdit(planId: string): Promise<PlanForEdit | null> {
   const admin = createSupabaseAdminClient();
 
-  const { data: plan } = await admin
-    .from("route_plans")
-    .select("id, planning_period_id, version, status, source, notes")
-    .eq("id", planId)
-    .maybeSingle();
-  if (!plan) return null;
-
   interface RawCluster {
     id: string;
     route_plan_id: string;
@@ -120,32 +113,57 @@ export async function getPlanForEdit(planId: string): Promise<PlanForEdit | null
     required_shift: string | null;
     required_temperature: string | null;
   }
-  const { data: clusters } = await admin
-    .from("driver_clusters")
-    .select(
-      "id, route_plan_id, cluster_name, sequence, " +
-        "estimated_total_minutes, estimated_total_distance_meters, " +
-        "estimated_total_volume, assigned_driver_id, " +
-        "required_shift, required_temperature"
-    )
-    .eq("route_plan_id", planId)
-    .order("sequence", { ascending: true })
-    .returns<RawCluster[]>();
+
+  // ★ 三個 query 同時下：plan info、clusters、DRA IDs。
+  //   原本是 sequential (plan → clusters → dra → route_stops)，現在前 3 個 parallel。
+  const [planRes, clustersRes, draRes] = await Promise.all([
+    admin
+      .from("route_plans")
+      .select("id, planning_period_id, version, status, source, notes")
+      .eq("id", planId)
+      .maybeSingle(),
+    admin
+      .from("driver_clusters")
+      .select(
+        "id, route_plan_id, cluster_name, sequence, " +
+          "estimated_total_minutes, estimated_total_distance_meters, " +
+          "estimated_total_volume, assigned_driver_id, " +
+          "required_shift, required_temperature"
+      )
+      .eq("route_plan_id", planId)
+      .order("sequence", { ascending: true })
+      .returns<RawCluster[]>(),
+    admin
+      .from("driver_route_assignments")
+      .select("id")
+      .eq("route_plan_id", planId)
+      .returns<{ id: string }[]>()
+  ]);
+
+  const plan = planRes.data;
+  if (!plan) return null;
+  const clusters = clustersRes.data;
+  const draRows = draRes.data;
 
   const clusterById = new Map<string, ClusterRow>();
   for (const c of clusters ?? []) {
     clusterById.set(c.id, { ...c, stops: [] });
   }
 
-  const { data: routeStops } = await admin
-    .from("route_stops")
-    .select(
-      "id, stop_id, stop_order, trip_index, estimated_arrival_time, " +
-        "estimated_service_minutes, cluster_id, " +
-        "stop:stops(name, address, city, district, avg_delivery_volume, shift, temperature_type)"
-    )
-    .order("stop_order", { ascending: true })
-    .returns<RawRouteStop[]>();
+  const draIds = (draRows ?? []).map((d) => d.id);
+  // route_stops 必須等 DRA IDs 出來才能 IN 查
+  const { data: routeStops } = draIds.length === 0
+    ? { data: [] as RawRouteStop[] }
+    : await admin
+        .from("route_stops")
+        .select(
+          "id, stop_id, stop_order, trip_index, estimated_arrival_time, " +
+            "estimated_service_minutes, cluster_id, " +
+            "stop:stops(name, address, city, district, avg_delivery_volume, shift, temperature_type)"
+        )
+        .in("driver_route_assignment_id", draIds)
+        .order("stop_order", { ascending: true })
+        .returns<RawRouteStop[]>();
 
   const unclustered: ClusterStop[] = [];
   for (const r of routeStops ?? []) {
@@ -153,9 +171,6 @@ export async function getPlanForEdit(planId: string): Promise<PlanForEdit | null
     if (r.cluster_id && clusterById.has(r.cluster_id)) {
       clusterById.get(r.cluster_id)!.stops.push(cs);
     } else {
-      // 只把屬於這個 plan 的 unclustered stops 收進來（透過 dra 過濾）
-      // 這裡為了簡單，先把所有 unclustered 都丟過去。實務上 route_stops 透過 dra
-      // 已經跟 plan 綁定；新 schema 仍然透過 dra 連到 plan。
       unclustered.push(cs);
     }
   }

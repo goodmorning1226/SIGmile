@@ -32,27 +32,41 @@ Supabase Dashboard → SQL Editor，按時間順序貼下面兩支：
 
 ### 1.2 建 demo 帳號
 
-Dashboard → Authentication → Users → **Add user** 建三個（勾「Auto Confirm User」）：
+Dashboard → Authentication → Users → **Add user** 建 7 個（勾「Auto Confirm User」）：
 
-| Email | Password 建議 | 角色 |
-|---|---|---|
-| `manager@example.com` | `sigmile-demo-2026` | manager |
-| `driver1@example.com` | `sigmile-demo-2026` | driver |
-| `driver2@example.com` | `sigmile-demo-2026` | driver |
+| Email | Password 建議 | 角色 | 用途 |
+|---|---|---|---|
+| `manager@example.com` | `sigmile-demo-2026` | manager | 主管後台登入 |
+| `driver1@example.com` | `sigmile-demo-2026` | driver | App 登入 / OR 派工 |
+| `driver2@example.com` | `sigmile-demo-2026` | driver | App 登入 / OR 派工 |
+| `driver3@example.com` | `sigmile-demo-2026` | driver | OR 派工（phase3 才需要） |
+| `driver4@example.com` | `sigmile-demo-2026` | driver | OR 派工（phase3 才需要） |
+| `driver5@example.com` | `sigmile-demo-2026` | driver | OR 派工（夜班、phase3） |
+| `driver6@example.com` | `sigmile-demo-2026` | driver | OR 派工（夜班、phase3） |
 
-### 1.3 取得三個 UUID
+driver3 ~ 6 不一定要登入 App，只是讓 OR engine 有更多人可分配，能跑出多條路線。
+
+### 1.3 取得 UUID
 
 SQL Editor：
 
 ```sql
 select id, email from auth.users
- where email in ('manager@example.com','driver1@example.com','driver2@example.com')
+ where email like '%@example.com'
  order by email;
 ```
 
-### 1.4 跑 demo seed
+只有 driver1 / driver2 / manager 的 UUID 要填進 `demo_seed.sql`；driver3 ~ 6 在 `demo_seed_phase3_mvp.sql` 是用 email 自動查詢，不用手填。
 
-打開 [supabase/seed/demo_seed.sql](supabase/seed/demo_seed.sql)，把開頭 `DO $$` block 內：
+### 1.4 跑 demo seed（4 支 SQL 依序）
+
+依序在 SQL Editor 貼上跑：
+
+#### 1.4.1 `supabase/migrations/20260521000000_or_phase2_fields.sql`
+Phase 2 schema：班別 / 溫層 / 一日二配 / route_set（driver_clusters）等欄位。
+
+#### 1.4.2 `supabase/seed/demo_seed.sql`
+打開檔，把開頭 `DO $$` block 內：
 
 ```sql
 manager_id  uuid := '00000000-0000-0000-0000-000000000099';
@@ -66,7 +80,17 @@ driver_2_id uuid := '00000000-0000-0000-0000-000000000002';
 [demo] DONE. plan=..., task1=..., task2=..., or_job=...
 ```
 
-即成功。整支 idempotent，可重跑。
+即成功。
+
+#### 1.4.3 `supabase/seed/demo_seed_phase2.sql`
+補齊 phase2 欄位 + 加 3 個 stops + 建 draft route_plan（給「路線集」/「物流士分配」頁示範草稿狀態）。
+**不用改 UUID**（會自動沿用 phase1 同樣的 UUID）。
+
+#### 1.4.4 `supabase/seed/demo_seed_phase3_mvp.sql`
+新增 4 個 driver profiles（用 email 自動查 driver3 ~ 6）+ 15 個 stops（日 9 + 夜 6）給 Gurobi 試算用。
+**不用改 UUID**（用 email 查）。
+
+4 支全部 idempotent，可重跑。
 
 ### 1.5 啟 Next.js 後台
 
@@ -173,18 +197,37 @@ App 開啟 → 用 `driver1@example.com` 登入 → 看到「今日配送」即�
 
 側欄點 **「發布新路線」**：
 
-1. **步驟 1 規劃參數** 區：展開「服務時間」卡，把「平均服務時間」從 10 改 12 → 按儲存
-2. 右上點 **「建立新規劃任務」** → 跳 modal 填 4 個欄位（已預填合理預設）→ 建立
-3. 任務列表會出現新一筆 `pending`
-4. 按 **「試算」** → 變 `completed`，顯示「物流士 2 / 站數 6 / 預估總工時 X 分鐘」
-5. 點 **「明細」** → 看到讀取後的「規劃條件」表單視圖 + 「試算結果」每位 driver 的 stops chips
-6. 試算結果滿意 → 按 **「採用並發布」** → 確認對話 → 完成
+1. 上方「步驟 0 · 停靠點資料」可以下載 Excel 修改 stops 後再上傳灌回（demo 可略過）
+2. 「步驟 1 · 規劃參數」展開後可調 α/β 權重、預設容量、一日趟次（1 or 2）
+3. 右上點 **「建立新規劃任務」** → 跳 modal → 建立
+4. 任務列表新增一筆 `pending`，按鈕有兩個選擇：
+   - **Mock 試算**：用內建演算法（按 city × shift bucket 切群），秒回，不需 Python
+   - **Gurobi 試算**：呼叫 `or-engine/solver_main.py` 跑 MTVRP，幾秒～幾分鐘
+5. 任一試算完成 → 變 `completed`，顯示「出動物流士 / 路線集 / 總站數 / 預估總工時」
+6. 點 **「明細」** → 看「規劃條件」+ 「試算結果」每條 R-001 / R-002... 路線集 + 第 1 趟 / 第 2 趟 stops
+7. 結果滿意 → 按 **「採用此結果」**（存草稿）或 **「採用並發布」**（直接發布）
 
-### 步驟 G · 路線歷史
+> **要跑 Gurobi 試算**先做：(a) 建 `or-engine/.venv` 並 `pip install -r requirements.txt`，
+> (b) Gurobi license 設好（學術/商業均可），(c) 重啟 Next.js dev server。
+> 詳見 [`or-engine/README.md`](or-engine/README.md)。
+> 沒裝 Gurobi 也能按按鈕，會自動 fallback 跑 mock 並彈窗顯示原因。
+
+### 步驟 G · 路線集 / 物流士分配
+
+側欄點 **「路線集」**：
+- 上方 tab 切「草稿」/「已發布」
+- 草稿可以拖動 stop 順序、改 cluster 名稱、跨群移動、合併/拆分
+- 「已發布」是 read-only banner，避免誤改
+
+側欄點 **「物流士分配」**：
+- 看每條路線集（R-001 …）目前指派給誰
+- 想換人按下拉選即可；發布時會檢查 shift / 容量 / 溫層三個錯配（紅色警告）
+
+### 步驟 H · 路線歷史
 
 側欄點 **「路線歷史」**：
-- 應該看到兩個版本：v1（archived）+ v2（published）
-- 展開 v2 看到所有 driver 的 stops 列表
+- 應該看到多個版本：v1（archived）+ ...（draft/published）
+- 展開看 driver 的 stops 列表
 - 用搜尋框打「板橋」可以快速濾出含板橋站的版本
 
 ---

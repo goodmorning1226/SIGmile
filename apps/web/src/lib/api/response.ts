@@ -22,6 +22,30 @@ export function handleApiError(err: unknown) {
     return fail(err.code, err.message, err.code === "UNAUTHENTICATED" ? 401 : 403);
   }
   console.error("[api] unhandled error", err);
-  const message = err instanceof Error ? err.message : "Unknown error";
-  return fail("INTERNAL_ERROR", message, 500);
+
+  // 把 Error / PostgrestError / 普通 object 都壓成有意義的訊息
+  let message = "Unknown error";
+  let details: unknown = undefined;
+  if (err instanceof Error) {
+    message = err.message;
+  } else if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    if (typeof o.message === "string" && o.message) {
+      message = o.message;
+      if (typeof o.details === "string" && o.details) {
+        details = o.details;
+      } else if (o.hint) {
+        details = o.hint;
+      }
+      if (typeof o.code === "string" && o.code) {
+        message = `[${o.code}] ${message}`;
+      }
+    } else {
+      try { message = JSON.stringify(err); } catch { /* noop */ }
+    }
+  } else if (typeof err === "string") {
+    message = err;
+  }
+
+  return fail("INTERNAL_ERROR", message, 500, details);
 }

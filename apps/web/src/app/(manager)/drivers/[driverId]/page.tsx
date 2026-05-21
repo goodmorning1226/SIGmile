@@ -1,4 +1,4 @@
-import { ArrowLeft, Clock, MapPin } from "lucide-react";
+import { ArrowLeft, Inbox } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { StatusBadge } from "@/components/status/StatusBadge";
 import { MapPlaceholder } from "@/components/map/MapPlaceholder";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ReorderTable } from "./ReorderTable";
 
 export const dynamic = "force-dynamic";
@@ -50,19 +51,62 @@ function todayInTaipei() {
 export default async function DriverDetailPage({ params }: PageProps) {
   const { driverId } = await params;
   const supabase = await createSupabaseServerClient();
+  const admin = createSupabaseAdminClient();
 
-  const { data: task } = await supabase
-    .from("delivery_tasks")
-    .select(
-      "id, delivery_date, status, current_stop_id, started_at, completed_at, " +
-        "driver:profiles(full_name, employee_code), " +
-        "assignment:driver_route_assignments(route_name)"
-    )
-    .eq("driver_id", driverId)
-    .eq("delivery_date", todayInTaipei())
-    .maybeSingle<TaskRow>();
+  // ★ profile + task 同時抓
+  const [profileRes, taskRes] = await Promise.all([
+    admin
+      .from("profiles")
+      .select("id, full_name, employee_code, shift, vehicle_capacity, temperature_capability")
+      .eq("id", driverId)
+      .maybeSingle<{
+        id: string; full_name: string; employee_code: string | null;
+        shift: string | null; vehicle_capacity: number | null;
+        temperature_capability: string | null;
+      }>(),
+    supabase
+      .from("delivery_tasks")
+      .select(
+        "id, delivery_date, status, current_stop_id, started_at, completed_at, " +
+          "driver:profiles(full_name, employee_code), " +
+          "assignment:driver_route_assignments(route_name)"
+      )
+      .eq("driver_id", driverId)
+      .eq("delivery_date", todayInTaipei())
+      .maybeSingle<TaskRow>()
+  ]);
 
-  if (!task) notFound();
+  const profile = profileRes.data;
+  const task = taskRes.data;
+
+  if (!profile) notFound();
+
+  // 沒任務：顯示「今日無任務」頁，不要 404
+  if (!task) {
+    return (
+      <>
+        <PageHeader
+          breadcrumb={
+            <Link href="/drivers" className="inline-flex items-center gap-1 hover:text-brand-600">
+              <ArrowLeft className="size-3.5" /> 返回物流士列表
+            </Link>
+          }
+          title={`${profile.full_name} · 今日無任務`}
+          description={`${profile.employee_code ?? "—"} · 班別 ${profile.shift ?? "—"} · 容量 ${profile.vehicle_capacity ?? "—"} 箱`}
+          actions={<StatusBadge status={"idle" as any} />}
+        />
+        <Card>
+          <CardContent className="flex items-center gap-3 py-12 text-sm text-slate-500">
+            <Inbox className="size-5 text-slate-400" />
+            <div>
+              這位物流士今天沒有被分派任務。
+              到「發布新路線」採用 / 發布一個包含此物流士的路線後就會出現。
+            </div>
+          </CardContent>
+        </Card>
+      </>
+    );
+  }
 
   const { data: stopsData } = await supabase
     .from("delivery_task_stops")

@@ -9,6 +9,7 @@ import {
 import {
   PlanTabsSelector,
   PublishedReadOnlyBanner,
+  DraftPublishBanner,
   type PlanTabKey
 } from "@/components/route-planning/PlanTabsSelector";
 import { ClusterEditor } from "./ClusterEditor";
@@ -26,7 +27,10 @@ export default async function ClustersPage({ searchParams }: PageProps) {
   if (!period) {
     return (
       <>
-        <PageHeader title="停靠點分群" description="把停靠點分成幾個群組，方便後續指派物流士" />
+        <PageHeader
+          title="路線集"
+          description="OR 跑完後的路線集合，每個路線集包含停靠點順序與指派的物流士"
+        />
         <Card>
           <CardContent className="py-12 text-center text-sm text-slate-500">
             尚未建立任何規劃期間
@@ -54,8 +58,8 @@ export default async function ClustersPage({ searchParams }: PageProps) {
   return (
     <>
       <PageHeader
-        title="停靠點分群"
-        description="把停靠點分成幾個群組並排序。每個群組之後會被指派給一位物流士。"
+        title="路線集"
+        description="OR 跑完後產生的路線集合。每個路線集對應一條物流士當天要跑的路線（含停靠順序）。"
       />
 
       <Card className="mb-6">
@@ -80,7 +84,11 @@ export default async function ClustersPage({ searchParams }: PageProps) {
 
       {plan && (
         <div className="space-y-4">
-          {isPublishedView && <PublishedReadOnlyBanner />}
+          {isPublishedView ? (
+            <PublishedReadOnlyBanner />
+          ) : (
+            <DraftPublishBanner planId={plan.id} version={plan.version} />
+          )}
           <ClusterEditor plan={plan} readOnly={isPublishedView} />
         </div>
       )}

@@ -23,7 +23,7 @@ const NAV: readonly NavGroup[] = [
     title: "路線管理",
     items: [
       { href: "/or-replanning", label: "發布新路線", icon: Send },
-      { href: "/clusters",      label: "停靠點分群", icon: Layers },
+      { href: "/clusters",      label: "路線集",     icon: Layers },
       { href: "/assignment",    label: "物流士分配", icon: Users },
       { href: "/route-planning", label: "路線歷史",   icon: History }
     ]

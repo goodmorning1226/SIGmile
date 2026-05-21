@@ -7,6 +7,7 @@ type AnyStatus = TaskStatus | TaskStopStatus | JobStatus | RoutePlanStatus | Urg
 
 const MAP: Record<string, { label: string; tone: BadgeTone }> = {
   // task / task_stop / job 共用
+  idle:         { label: "今日無任務", tone: "neutral" },
   pending:      { label: "待處理",  tone: "neutral" },
   in_progress:  { label: "進行中",  tone: "info"    },
   running:      { label: "執行中",  tone: "info"    },

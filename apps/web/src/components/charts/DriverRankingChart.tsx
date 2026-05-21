@@ -1,6 +1,6 @@
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
-import type { DriverRanking } from "@/lib/services/dashboard-charts-service";
+import type { DriverRanking } from "@/lib/services/dashboard-service";
 
 /**
  * 物流士進度排行（horizontal bars）

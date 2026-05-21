@@ -1,8 +1,18 @@
 import "server-only";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
+/**
+ * task_status:
+ *   - "idle"          → 物流士今天沒被派任務（profile 存在 + active）
+ *   - "pending"       → 已派任務但尚未開始
+ *   - "in_progress"   → 配送中
+ *   - "completed"     → 全部配完
+ *   - "cancelled"     → 任務取消
+ */
 export interface DriverOverviewRow {
-  task_id: string;
+  /** 沒任務的 driver 為 null */
+  task_id: string | null;
   driver_id: string;
   driver_name: string;
   employee_code: string | null;
@@ -46,34 +56,77 @@ function todayInTaipei() {
 
 export async function getDriversOverview(date?: string): Promise<DriverOverviewRow[]> {
   const supabase = await createSupabaseServerClient();
+  const admin = createSupabaseAdminClient();
   const target = date ?? todayInTaipei();
 
-  const { data: tasks, error: tErr } = await supabase
-    .from("delivery_tasks")
-    .select(
-      "id, driver_id, status, current_stop_id, " +
-        "driver:profiles(full_name, employee_code), " +
-        "assignment:driver_route_assignments(route_name)"
-    )
-    .eq("delivery_date", target)
-    .returns<TaskRow[]>();
-  if (tErr) throw tErr;
-  if (!tasks || tasks.length === 0) return [];
+  interface ProfileRow {
+    id: string;
+    full_name: string;
+    employee_code: string | null;
+  }
+  // ★ profiles + tasks 同時下
+  const [profilesRes, tasksRes] = await Promise.all([
+    admin
+      .from("profiles")
+      .select("id, full_name, employee_code")
+      .eq("role", "driver")
+      .eq("is_active", true)
+      .order("employee_code", { ascending: true })
+      .returns<ProfileRow[]>(),
+    supabase
+      .from("delivery_tasks")
+      .select(
+        "id, driver_id, status, current_stop_id, " +
+          "driver:profiles(full_name, employee_code), " +
+          "assignment:driver_route_assignments(route_name)"
+      )
+      .eq("delivery_date", target)
+      .returns<TaskRow[]>()
+  ]);
+  const profiles = profilesRes.data ?? [];
+  if (tasksRes.error) throw tasksRes.error;
+  const tasks = tasksRes.data;
 
-  const taskIds = tasks.map((t) => t.id);
-  const { data: stops, error: sErr } = await supabase
-    .from("delivery_task_stops")
-    .select("delivery_task_id, stop_id, stop_order, status, stop:stops(name)")
-    .in("delivery_task_id", taskIds)
-    .order("stop_order", { ascending: true })
-    .returns<StopRow[]>();
-  if (sErr) throw sErr;
+  const taskList = tasks ?? [];
+  const tasksByDriver = new Map<string, TaskRow>();
+  for (const t of taskList) tasksByDriver.set(t.driver_id, t);
 
-  return tasks.map((t) => {
-    const ownStops = (stops ?? []).filter((s) => s.delivery_task_id === t.id);
+  // 3. 今日所有 task 的 stops（一次抓）
+  let stops: StopRow[] = [];
+  if (taskList.length > 0) {
+    const taskIds = taskList.map((t) => t.id);
+    const { data: stopsRaw, error: sErr } = await supabase
+      .from("delivery_task_stops")
+      .select("delivery_task_id, stop_id, stop_order, status, stop:stops(name)")
+      .in("delivery_task_id", taskIds)
+      .order("stop_order", { ascending: true })
+      .returns<StopRow[]>();
+    if (sErr) throw sErr;
+    stops = stopsRaw ?? [];
+  }
+
+  // 4. 對每位 active driver 組 row（不論今天有沒有任務）
+  const rows: DriverOverviewRow[] = profiles.map((p) => {
+    const t = tasksByDriver.get(p.id);
+    if (!t) {
+      return {
+        task_id: null,
+        driver_id: p.id,
+        driver_name: p.full_name,
+        employee_code: p.employee_code,
+        route_name: null,
+        task_status: "idle",
+        current_stop_id: null,
+        current_stop_name: null,
+        next_stop_name: null,
+        completed: 0,
+        total: 0,
+        exceptions: 0
+      };
+    }
+    const ownStops = stops.filter((s) => s.delivery_task_id === t.id);
     const completed = ownStops.filter((s) => s.status === "completed").length;
     const exceptions = ownStops.filter((s) => s.status === "failed").length;
-
     const currentStop = ownStops.find((s) => s.stop_id === t.current_stop_id);
     const currentOrder = currentStop?.stop_order ?? -1;
     const nextStop = ownStops.find(
@@ -81,15 +134,12 @@ export async function getDriversOverview(date?: string): Promise<DriverOverviewR
         s.stop_order > currentOrder &&
         (s.status === "pending" || s.status === "navigating" || s.status === "arrived")
     );
-
-    const driver = pickFirst(t.driver);
     const assignment = pickFirst(t.assignment);
-
     return {
       task_id: t.id,
       driver_id: t.driver_id,
-      driver_name: driver?.full_name ?? "(未知)",
-      employee_code: driver?.employee_code ?? null,
+      driver_name: p.full_name,
+      employee_code: p.employee_code,
       route_name: assignment?.route_name ?? null,
       task_status: t.status,
       current_stop_id: t.current_stop_id,
@@ -99,5 +149,7 @@ export async function getDriversOverview(date?: string): Promise<DriverOverviewR
       total: ownStops.length,
       exceptions
     };
-  }).sort((a, b) => (a.employee_code ?? "").localeCompare(b.employee_code ?? ""));
+  });
+
+  return rows.sort((a, b) => (a.employee_code ?? "").localeCompare(b.employee_code ?? ""));
 }

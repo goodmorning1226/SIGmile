@@ -41,7 +41,11 @@ export class RoutePlanService {
     return { id: data.id, version: data.version };
   }
 
-  async publishPlan(planId: string): Promise<void> {
+  /**
+   * 發布 plan，並一次把今日 delivery_tasks 建好（之前舊版的 task 會被先清掉，避免雙份）。
+   * 回傳 `tasksCreated` 給呼叫端參考。
+   */
+  async publishPlan(planId: string): Promise<{ tasksCreated: number }> {
     const admin = createSupabaseAdminClient();
 
     const { data: plan, error } = await admin
@@ -52,7 +56,9 @@ export class RoutePlanService {
     if (error || !plan) throw error ?? new Error("Plan not found");
     if (plan.status === "archived") throw new Error("Cannot publish an archived plan");
 
-    // 同 period 其它已 published → archived
+    const date = todayInTaipei();
+
+    // 1. 同 period 其它已 published → archived
     await admin
       .from("route_plans")
       .update({ status: "archived" })
@@ -60,10 +66,48 @@ export class RoutePlanService {
       .eq("status", "published")
       .neq("id", planId);
 
+    // 2. 清掉這個 period 之下「今日」已存在的 delivery_tasks（避免跟舊發布版混在一起）
+    //    需要先把 driver_locations.delivery_task_id 解鉤
+    const { data: oldPlansData } = await admin
+      .from("route_plans")
+      .select("id")
+      .eq("planning_period_id", plan.planning_period_id);
+    const oldPlanIds = (oldPlansData ?? []).map((p) => p.id);
+    if (oldPlanIds.length > 0) {
+      const { data: oldDras } = await admin
+        .from("driver_route_assignments")
+        .select("id")
+        .in("route_plan_id", oldPlanIds);
+      const oldDraIds = (oldDras ?? []).map((d) => d.id);
+      if (oldDraIds.length > 0) {
+        const { data: oldTasks } = await admin
+          .from("delivery_tasks")
+          .select("id")
+          .eq("delivery_date", date)
+          .in("driver_route_assignment_id", oldDraIds);
+        const oldTaskIds = (oldTasks ?? []).map((t) => t.id);
+        if (oldTaskIds.length > 0) {
+          await admin
+            .from("driver_locations")
+            .update({ delivery_task_id: null })
+            .in("delivery_task_id", oldTaskIds);
+          await admin
+            .from("delivery_tasks")
+            .delete()
+            .in("id", oldTaskIds);
+        }
+      }
+    }
+
+    // 3. 把新 plan 標 published
     await admin
       .from("route_plans")
       .update({ status: "published", published_at: new Date().toISOString() })
       .eq("id", planId);
+
+    // 4. 展開成今日 tasks
+    const r = await this.generateDailyTasksFromPublished(planId, date);
+    return { tasksCreated: r.tasksCreated };
   }
 
   async reorderStops(items: Array<{ id: string; stop_order: number }>): Promise<void> {
@@ -101,6 +145,8 @@ export class RoutePlanService {
 
     let created = 0;
     for (const a of assignments ?? []) {
+      // 沒指派 driver 的 cluster 不建 task（主管要先去 /assignment 補）
+      if (!a.driver_id) continue;
       const { data: exists } = await admin
         .from("delivery_tasks")
         .select("id")

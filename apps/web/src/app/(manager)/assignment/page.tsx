@@ -10,6 +10,7 @@ import {
 import {
   PlanTabsSelector,
   PublishedReadOnlyBanner,
+  DraftPublishBanner,
   type PlanTabKey
 } from "@/components/route-planning/PlanTabsSelector";
 import { AssignmentBoard, type DriverOption } from "./AssignmentBoard";
@@ -27,7 +28,7 @@ export default async function AssignmentPage({ searchParams }: PageProps) {
   if (!period) {
     return (
       <>
-        <PageHeader title="物流士分配" description="把分群好的停靠點指派給物流士" />
+        <PageHeader title="物流士分配" description="把 OR 跑出的路線集指派給物流士" />
         <Card>
           <CardContent className="py-12 text-center text-sm text-slate-500">
             尚未建立任何規劃期間
@@ -37,7 +38,19 @@ export default async function AssignmentPage({ searchParams }: PageProps) {
     );
   }
 
-  const plans = await listEditablePlans(period.id);
+  // ★ plans + drivers 同步抓
+  const admin = createSupabaseAdminClient();
+  const [plans, driversRes] = await Promise.all([
+    listEditablePlans(period.id),
+    admin
+      .from("profiles")
+      .select("id, full_name, employee_code, shift, vehicle_capacity, temperature_capability, is_active")
+      .eq("role", "driver")
+      .eq("is_active", true)
+      .order("employee_code", { ascending: true })
+  ]);
+  const driversRaw = driversRes.data;
+
   const activeTab: PlanTabKey = sp.tab === "published" ? "published" : "drafts";
 
   const tabPlans = plans.filter((p) =>
@@ -50,15 +63,6 @@ export default async function AssignmentPage({ searchParams }: PageProps) {
 
   const plan = planId ? await getPlanForEdit(planId) : null;
   const isPublishedView = plan?.status === "published";
-
-  // 載入該 distribution_center 底下的 active driver
-  const admin = createSupabaseAdminClient();
-  const { data: driversRaw } = await admin
-    .from("profiles")
-    .select("id, full_name, employee_code, shift, vehicle_capacity, temperature_capability, is_active")
-    .eq("role", "driver")
-    .eq("is_active", true)
-    .order("employee_code", { ascending: true });
 
   const drivers: DriverOption[] = ((driversRaw ?? []) as Array<{
     id: string; full_name: string; employee_code: string | null;
@@ -77,7 +81,7 @@ export default async function AssignmentPage({ searchParams }: PageProps) {
     <>
       <PageHeader
         title="物流士分配"
-        description="把已分群的停靠點群組指派給每位物流士。每個群組就是該物流士當天負責的所有站點。"
+        description="把 OR 跑出的路線集指派給物流士。OR 跑完時已預先建議分配，可在此檢視或微調。"
       />
 
       <Card className="mb-6">
@@ -102,7 +106,11 @@ export default async function AssignmentPage({ searchParams }: PageProps) {
 
       {plan && (
         <div className="space-y-4">
-          {isPublishedView && <PublishedReadOnlyBanner />}
+          {isPublishedView ? (
+            <PublishedReadOnlyBanner />
+          ) : (
+            <DraftPublishBanner planId={plan.id} version={plan.version} />
+          )}
           <AssignmentBoard plan={plan} drivers={drivers} readOnly={isPublishedView} />
         </div>
       )}

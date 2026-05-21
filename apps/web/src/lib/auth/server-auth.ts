@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { UserRole } from "@/types/domain";
 
@@ -9,10 +10,12 @@ export interface AuthContext {
 }
 
 /**
- * 從 cookie session 取得登入者，並一併讀出 profiles.role。
- * 找不到時回傳 null（路由端應自行回 401）。
+ * 從 cookie session 取得登入者 + profile 的 role / full_name。
+ *
+ * ★ 用 React.cache 包：同一個 server render 內多次呼叫只打 1 次 Supabase。
+ *   過去 layout + 個別 service 各自 await，造成同一 render 內 2-3 次 auth round-trip。
  */
-export async function getAuthContext(): Promise<AuthContext | null> {
+export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
@@ -31,7 +34,7 @@ export async function getAuthContext(): Promise<AuthContext | null> {
     fullName: profile.full_name,
     email: user.email ?? null
   };
-}
+});
 
 export async function requireManager(): Promise<AuthContext> {
   const ctx = await getAuthContext();

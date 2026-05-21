@@ -87,7 +87,7 @@ export function AssignmentBoard({
     return (
       <Card>
         <CardContent className="py-12 text-center text-sm text-slate-500">
-          此版本沒有任何群組。請先到「停靠點分群」建立群組。
+          此版本沒有任何路線集。請先到「發布新路線」跑 OR 試算。
         </CardContent>
       </Card>
     );

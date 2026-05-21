@@ -12,6 +12,7 @@ import type { DriverOverviewRow } from "@/lib/services/driver-overview-service";
 
 const STATUS_FILTERS = [
   { value: "all",         label: "全部狀態" },
+  { value: "idle",        label: "今日無任務" },
   { value: "pending",     label: "尚未開始" },
   { value: "in_progress", label: "配送中" },
   { value: "completed",   label: "已完成" }
@@ -76,7 +77,7 @@ export function DriverGrid({ rows }: { rows: DriverOverviewRow[] }) {
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((r) => <DriverTile key={r.task_id} row={r} />)}
+          {filtered.map((r) => <DriverTile key={r.driver_id} row={r} />)}
         </div>
       )}
     </div>

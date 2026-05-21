@@ -8,8 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { HourlyProgressChart } from "@/components/charts/HourlyProgressChart";
 import { DriverRankingChart } from "@/components/charts/DriverRankingChart";
 import { StopStatusDonut } from "@/components/charts/StopStatusDonut";
-import { metricsService } from "@/lib/services/metrics-service";
-import { getDashboardCharts } from "@/lib/services/dashboard-charts-service";
+import { getDashboardBundle } from "@/lib/services/dashboard-service";
 import { AiAnalysisButton } from "./AiAnalysisButton";
 
 export const dynamic = "force-dynamic";
@@ -28,10 +27,9 @@ function toneByCount(count: number, warnAtOrAbove: number, badAtOrAbove: number)
 }
 
 export default async function DashboardPage() {
-  const [kpi, charts] = await Promise.all([
-    metricsService.getDashboardKpi(),
-    getDashboardCharts()
-  ]);
+  // 一次 round-trip 抓 tasks+stops，同時算 KPI 和圖表
+  // （之前 metricsService + getDashboardCharts 各打一次同樣的 query）
+  const { kpi, charts } = await getDashboardBundle();
 
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
   const completionTone = toneByRate(kpi.completion_rate, 0.8, 0.5);

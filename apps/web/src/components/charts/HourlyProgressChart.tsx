@@ -1,4 +1,4 @@
-import type { HourlyPoint } from "@/lib/services/dashboard-charts-service";
+import type { HourlyPoint } from "@/lib/services/dashboard-service";
 
 /**
  * 純 SVG area chart：顯示今日累計完成站數隨時間的成長

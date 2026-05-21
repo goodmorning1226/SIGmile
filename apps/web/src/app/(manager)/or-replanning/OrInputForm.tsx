@@ -3,27 +3,40 @@
 import * as React from "react";
 import { Field, FieldGroup } from "@/components/form/Field";
 import { NumberInput } from "@/components/form/NumberInput";
-import { SelectInput } from "@/components/form/SelectInput";
 import { Slider } from "@/components/form/Slider";
 
+/**
+ * MTVRP 主管端參數。「duration matrix」「service_minutes」「demand」這些
+ * **不**列在這裡：它們從 stops 主檔抓（OR engine 跑時自動帶入 + 用 TomTom 算行車時間）。
+ *
+ * 主管可調整：
+ *   - 權重 α (時間成本) / β (派工成本)
+ *   - 預設容量 / 預設工時上限（fallback；driver profile 有就優先用）
+ *   - 一日趟次（1 = 單趟 / 2 = 早晚二配）
+ */
 export interface OrInputParams {
-  service_minutes: { mean: number; p90: number };
-  workload: { stops_per_driver_target: number; max_minutes_per_driver: number };
-  objective: "minimize_total_minutes" | "minimize_distance" | "balance_load";
-  vehicle_capacity_boxes: number;
-  /** 權重（α 配送時間成本、β 派工人力成本）。γ 加班成本由後端寫死，不開放 UI */
   weights: {
-    alpha_travel_time: number;   // 越大 → 越在意總時間
-    beta_dispatch:     number;   // 越大 → 越想少派人
+    alpha_travel_time: number;
+    beta_dispatch:     number;
   };
+  defaults: {
+    vehicle_capacity_boxes: number;
+    max_work_minutes:       number;
+    service_minutes_default: number;
+  };
+  num_trips: 1 | 2;
 }
 
 export const DEFAULT_OR_INPUT: OrInputParams = {
-  service_minutes: { mean: 10, p90: 14 },
-  workload: { stops_per_driver_target: 28, max_minutes_per_driver: 480 },
-  objective: "minimize_total_minutes",
-  vehicle_capacity_boxes: 60,
-  weights: { alpha_travel_time: 1.0, beta_dispatch: 300.0 }
+  // β=50 預設：對小規模 demo（10-30 stops）讓 OR 偏好分多人；
+  // 真實大量資料時主管可拉高（β↑ → 集中）或拉低（β↓ → 分散）
+  weights: { alpha_travel_time: 1.0, beta_dispatch: 50.0 },
+  defaults: {
+    vehicle_capacity_boxes: 60,
+    max_work_minutes: 480,
+    service_minutes_default: 10
+  },
+  num_trips: 2
 };
 
 interface Props {
@@ -38,66 +51,61 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
 
   return (
     <div className="space-y-4">
-      <FieldGroup title="服務時間估算" description="OR 排程時用的平均服務時間">
-        <Field label="平均服務時間" suffix="分鐘">
+      <FieldGroup title="一日趟次" description="OR 規劃時每位物流士最多可以跑幾趟（回 depot 補貨次數 +1）">
+        <Field label="趟次" className="sm:col-span-2">
+          <div className="flex gap-2">
+            {[1, 2].map((n) => (
+              <button
+                key={n}
+                type="button"
+                disabled={readOnly}
+                onClick={() => set("num_trips", n as 1 | 2)}
+                className={
+                  "rounded-md border px-4 py-1.5 text-sm font-medium transition " +
+                  (value.num_trips === n
+                    ? "border-brand-500 bg-brand-50 text-brand-700"
+                    : "border-slate-200 text-slate-600 hover:bg-slate-50") +
+                  (readOnly ? " cursor-not-allowed opacity-60" : "")
+                }
+              >
+                {n === 1 ? "1 趟（單班）" : "2 趟（早晚二配）"}
+              </button>
+            ))}
+          </div>
+        </Field>
+      </FieldGroup>
+
+      <FieldGroup
+        title="預設車輛 / 工時"
+        description="物流士個人檔案 (profile) 有設就以個人為準；以下為 fallback。"
+      >
+        <Field label="預設單車容量" suffix="箱">
           <NumberInput
-            value={value.service_minutes.mean}
-            onChange={(n) => set("service_minutes", { ...value.service_minutes, mean: n })}
-            min={0} disabled={readOnly}
+            value={value.defaults.vehicle_capacity_boxes}
+            onChange={(n) => set("defaults", { ...value.defaults, vehicle_capacity_boxes: n })}
+            min={1} disabled={readOnly}
           />
         </Field>
-        <Field label="P90 服務時間" suffix="分鐘" hint="90% 的站會在這個時間內完成">
+        <Field label="預設工時上限" suffix="分鐘" hint="超過就會 fallback 開新司機">
           <NumberInput
-            value={value.service_minutes.p90}
-            onChange={(n) => set("service_minutes", { ...value.service_minutes, p90: n })}
-            min={0} disabled={readOnly}
+            value={value.defaults.max_work_minutes}
+            onChange={(n) => set("defaults", { ...value.defaults, max_work_minutes: n })}
+            min={60} step={30} disabled={readOnly}
+          />
+        </Field>
+        <Field label="預設服務時間" suffix="分鐘" hint="停靠點本身沒設定時用">
+          <NumberInput
+            value={value.defaults.service_minutes_default}
+            onChange={(n) => set("defaults", { ...value.defaults, service_minutes_default: n })}
+            min={1} disabled={readOnly}
           />
         </Field>
       </FieldGroup>
 
-      <FieldGroup title="員工負荷限制" description="每位物流士的工作量上限">
-        <Field label="每人目標站數" suffix="站">
-          <NumberInput
-            value={value.workload.stops_per_driver_target}
-            onChange={(n) => set("workload", { ...value.workload, stops_per_driver_target: n })}
-            min={0} disabled={readOnly}
-          />
-        </Field>
-        <Field label="每人工時上限" suffix="分鐘">
-          <NumberInput
-            value={value.workload.max_minutes_per_driver}
-            onChange={(n) => set("workload", { ...value.workload, max_minutes_per_driver: n })}
-            min={0} step={10} disabled={readOnly}
-          />
-        </Field>
-      </FieldGroup>
-
-      <FieldGroup title="目標與車輛設定">
-        <Field label="優化目標">
-          <SelectInput
-            value={value.objective}
-            onChange={(v) => set("objective", v as OrInputParams["objective"])}
-            options={[
-              { value: "minimize_total_minutes", label: "總工時最少" },
-              { value: "minimize_distance",      label: "總里程最短" },
-              { value: "balance_load",           label: "員工負擔均衡" }
-            ]}
-            disabled={readOnly}
-          />
-        </Field>
-        <Field label="單台車容量" suffix="箱">
-          <NumberInput
-            value={value.vehicle_capacity_boxes}
-            onChange={(n) => set("vehicle_capacity_boxes", n)}
-            min={0} disabled={readOnly}
-          />
-        </Field>
-      </FieldGroup>
-
-      <FieldGroup title="成本權重" description="拖動滑桿調整不同成本在優化中的相對重要性">
+      <FieldGroup title="OR 成本權重" description="拖動滑桿調整不同成本在優化目標中的權重">
         <Field
-          label="配送時間成本"
-          hint="數字越大 → 更傾向縮短總配送時間（包含行駛+服務）"
+          label="α — 配送時間成本"
+          hint="越大 → OR 越在意縮短總配送時間（行駛 + 服務）"
           className="sm:col-span-2"
         >
           <Slider
@@ -109,8 +117,8 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
           />
         </Field>
         <Field
-          label="派工成本"
-          hint="數字越大 → 更傾向減少出動的物流士人數"
+          label="β — 派工成本"
+          hint="越大 → OR 越想集中到少數人；越小 → 越想分散到所有物流士。所有啟用中的物流士都會被 OR 自動納入（不用設 SQL）。"
           className="sm:col-span-2"
         >
           <Slider
@@ -131,24 +139,9 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
  */
 export function parseOrInputParams(raw: unknown): OrInputParams {
   const r = (raw ?? {}) as Record<string, any>;
+  const tripsRaw = Number(r?.num_trips);
+  const trips = tripsRaw === 1 ? 1 : 2;
   return {
-    service_minutes: {
-      mean: Number(r?.service_minutes?.mean ?? DEFAULT_OR_INPUT.service_minutes.mean),
-      p90:  Number(r?.service_minutes?.p90  ?? DEFAULT_OR_INPUT.service_minutes.p90)
-    },
-    workload: {
-      stops_per_driver_target: Number(
-        r?.workload?.stops_per_driver_target ?? DEFAULT_OR_INPUT.workload.stops_per_driver_target
-      ),
-      max_minutes_per_driver: Number(
-        r?.workload?.max_minutes_per_driver  ?? DEFAULT_OR_INPUT.workload.max_minutes_per_driver
-      )
-    },
-    objective: (["minimize_total_minutes","minimize_distance","balance_load"]
-                 .includes(r?.objective) ? r.objective : "minimize_total_minutes"),
-    vehicle_capacity_boxes: Number(
-      r?.vehicle_capacity_boxes ?? DEFAULT_OR_INPUT.vehicle_capacity_boxes
-    ),
     weights: {
       alpha_travel_time: Number(
         r?.weights?.alpha_travel_time ?? DEFAULT_OR_INPUT.weights.alpha_travel_time
@@ -156,12 +149,24 @@ export function parseOrInputParams(raw: unknown): OrInputParams {
       beta_dispatch: Number(
         r?.weights?.beta_dispatch ?? DEFAULT_OR_INPUT.weights.beta_dispatch
       )
-    }
+    },
+    defaults: {
+      vehicle_capacity_boxes: Number(
+        r?.defaults?.vehicle_capacity_boxes
+          ?? r?.vehicle_capacity_boxes
+          ?? DEFAULT_OR_INPUT.defaults.vehicle_capacity_boxes
+      ),
+      max_work_minutes: Number(
+        r?.defaults?.max_work_minutes
+          ?? r?.workload?.max_minutes_per_driver
+          ?? DEFAULT_OR_INPUT.defaults.max_work_minutes
+      ),
+      service_minutes_default: Number(
+        r?.defaults?.service_minutes_default
+          ?? r?.service_minutes?.mean
+          ?? DEFAULT_OR_INPUT.defaults.service_minutes_default
+      )
+    },
+    num_trips: trips
   };
 }
-
-export const OBJECTIVE_LABEL: Record<OrInputParams["objective"], string> = {
-  minimize_total_minutes: "總工時最少",
-  minimize_distance: "總里程最短",
-  balance_load: "員工負擔均衡"
-};

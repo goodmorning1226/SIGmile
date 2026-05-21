@@ -1,7 +1,7 @@
 import { requireManager } from "@/lib/auth/server-auth";
 import { ok, fail, handleApiError } from "@/lib/api/response";
 import { aiService } from "@/lib/services/ai-service";
-import { metricsService } from "@/lib/services/metrics-service";
+import { getDashboardBundle } from "@/lib/services/dashboard-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     const admin = createSupabaseAdminClient();
 
     // 真實 KPI snapshot
-    const kpi = await metricsService.getDashboardKpi();
+    const { kpi } = await getDashboardBundle();
 
     // 真實延誤路線：找今天 task_stops 中
     //   - 狀態 != completed/skipped

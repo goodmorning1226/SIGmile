@@ -15,8 +15,8 @@ export async function POST(
   try {
     await requireManager();
     const { id } = await context.params;
-    await routePlanService.publishPlan(id);
-    return ok({ id, status: "published" });
+    const r = await routePlanService.publishPlan(id);
+    return ok({ id, status: "published", tasksCreated: r.tasksCreated });
   } catch (e) {
     return handleApiError(e);
   }

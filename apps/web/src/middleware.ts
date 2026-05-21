@@ -50,9 +50,13 @@ export async function middleware(request: NextRequest) {
     },
   );
 
+  // ★ 用 getSession（cookie-only，無網路 round-trip）做「是否已登入」的判斷。
+  //   真正的 JWT 驗證 + 抓 profile 在 server component layout 由 getAuthContext() 做。
+  //   過去 middleware 用 getUser() 每次切頁都打 Supabase auth server, +200-500ms。
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
+  const user = session?.user ?? null;
 
   const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
 

@@ -1,4 +1,4 @@
-import type { StatusBreakdown } from "@/lib/services/dashboard-charts-service";
+import type { StatusBreakdown } from "@/lib/services/dashboard-service";
 
 interface Segment {
   key: keyof StatusBreakdown;

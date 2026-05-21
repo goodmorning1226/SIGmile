@@ -34,30 +34,34 @@ interface AssignmentRow {
 export default async function RouteHistoryPage() {
   const supabase = await createSupabaseServerClient();
 
-  const { data: periods } = await supabase
-    .from("planning_periods")
-    .select("id, code, name, start_date, end_date, status")
-    .order("start_date", { ascending: false })
-    .returns<PeriodRow[]>();
-
-  const { data: plans } = await supabase
-    .from("route_plans")
-    .select(
-      "id, planning_period_id, version, status, source, published_at, notes, created_at"
-    )
-    .order("created_at", { ascending: false })
-    .limit(100)
-    .returns<PlanRow[]>();
-
-  const { data: assignments } = await supabase
-    .from("driver_route_assignments")
-    .select(
-      "id, route_plan_id, route_name, sequence, " +
-        "estimated_total_minutes, estimated_total_distance_meters, " +
-        "driver:profiles(full_name, employee_code), " +
-        "route_stops(id, stop_order, stop:stops(name))"
-    )
-    .returns<AssignmentRow[]>();
+  // ★ 三個 query 同時下
+  const [periodsRes, plansRes, assignmentsRes] = await Promise.all([
+    supabase
+      .from("planning_periods")
+      .select("id, code, name, start_date, end_date, status")
+      .order("start_date", { ascending: false })
+      .returns<PeriodRow[]>(),
+    supabase
+      .from("route_plans")
+      .select(
+        "id, planning_period_id, version, status, source, published_at, notes, created_at"
+      )
+      .order("created_at", { ascending: false })
+      .limit(100)
+      .returns<PlanRow[]>(),
+    supabase
+      .from("driver_route_assignments")
+      .select(
+        "id, route_plan_id, route_name, sequence, " +
+          "estimated_total_minutes, estimated_total_distance_meters, " +
+          "driver:profiles(full_name, employee_code), " +
+          "route_stops(id, stop_order, stop:stops(name))"
+      )
+      .returns<AssignmentRow[]>()
+  ]);
+  const periods = periodsRes.data;
+  const plans = plansRes.data;
+  const assignments = assignmentsRes.data;
 
   return (
     <>
