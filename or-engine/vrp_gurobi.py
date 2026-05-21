@@ -17,6 +17,9 @@ Variables
   T[i]       >= 0        arrival time at i (one per node, per the TeX)
   W[p]       >= 0        total work minutes of driver p
   O[p]       >= 0        overtime minutes of driver p
+  B[p]       >= 0        total boxes per driver
+  W_max/min  >= 0        workload range (over dispatched drivers)
+  B_max/min  >= 0        box-count range (over dispatched drivers)
 
 Auxiliary (introduced by (J), not formally listed in the TeX)
   Ts[p,r]    >= 0        trip r start time (depot departure)
@@ -44,6 +47,8 @@ def solve_mtvrp(
     H_bar,        # dict p -> max minutes
     H,            # dict p -> overtime threshold
     alpha, beta, gamma,
+    delta_w=0.0,  # penalty weight on max(W_p) - min(W_p) over dispatched drivers
+    delta_b=0.0,  # penalty weight on max(B_p) - min(B_p) over dispatched drivers
     M=10_000,
     time_limit_s=300,
     mip_gap=0.05,
@@ -63,6 +68,12 @@ def solve_mtvrp(
     O = m.addVars(P, vtype=GRB.CONTINUOUS, lb=0.0, name="O")
     Ts = m.addVars(P, R, vtype=GRB.CONTINUOUS, lb=0.0, name="Ts")
     Te = m.addVars(P, R, vtype=GRB.CONTINUOUS, lb=0.0, name="Te")
+    # Per-driver box total + max/min for balance penalties
+    B = m.addVars(P, vtype=GRB.CONTINUOUS, lb=0.0, name="B")
+    W_max = m.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name="W_max")
+    W_min = m.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name="W_min")
+    B_max = m.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name="B_max")
+    B_min = m.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name="B_min")
 
     for i in N:
         for p in P:
@@ -91,16 +102,21 @@ def solve_mtvrp(
             Ts[p, r].UB = T_UB
             Te[p, r].UB = T_UB
 
+    # ---------- objective ----------
     travel = gp.quicksum(
         (tau[i, j] + sigma[i]) * x[i, j, p, r]
         for p in P for r in R for i in N for j in N
     )
     m.setObjective(
-        alpha * travel + beta * gp.quicksum(u[p] for p in P)
-        + gamma * gp.quicksum(O[p] for p in P),
+        alpha * travel
+        + beta * gp.quicksum(u[p] for p in P)
+        + gamma * gp.quicksum(O[p] for p in P)
+        + delta_w * (W_max - W_min)
+        + delta_b * (B_max - B_min),
         GRB.MINIMIZE,
     )
 
+    # ---------- constraints ----------
     for i in customers:
         m.addConstr(gp.quicksum(y[i, p, r] for p in P for r in R) == 1,
                     name=f"A_serve_{i}")
@@ -147,10 +163,8 @@ def solve_mtvrp(
 
     for p in P:
         m.addConstr(W[p] <= H_bar[p], name=f"F_maxH_{p}")
-
     for p in P:
         m.addConstr(O[p] >= W[p] - H[p], name=f"G_OT_{p}")
-
     for p in P:
         m.addConstr(W[p] <= M * u[p], name=f"H_disp_{p}")
 
@@ -186,8 +200,24 @@ def solve_mtvrp(
                 name=f"K_cap_{p}_{r}",
             )
 
+    # (N) Workload balance — penalize max(W_p) - min(W_p) over dispatched drivers
+    for p in P:
+        m.addConstr(W_max >= W[p], name=f"N_Wmax_{p}")
+        # When u_p = 0 (idle), big-M relaxes the lower-bound-on-min constraint
+        m.addConstr(W_min <= W[p] + M * (1 - u[p]), name=f"N_Wmin_{p}")
+
+    # (O) Box-count balance — B_p = total boxes per driver across all trips
+    for p in P:
+        m.addConstr(
+            B[p] == gp.quicksum(q[i] * y[i, p, r] for r in R for i in customers),
+            name=f"O_B_{p}",
+        )
+        m.addConstr(B_max >= B[p], name=f"O_Bmax_{p}")
+        m.addConstr(B_min <= B[p] + M * (1 - u[p]), name=f"O_Bmin_{p}")
+
     m.optimize()
-    return m, dict(x=x, y=y, u=u, T=T, W=W, O=O, Ts=Ts, Te=Te)
+    return m, dict(x=x, y=y, u=u, T=T, W=W, O=O, Ts=Ts, Te=Te,
+                   B=B, W_max=W_max, W_min=W_min, B_max=B_max, B_min=B_min)
 
 
 def extract_routes(model, vars_, P, N, R, depot):

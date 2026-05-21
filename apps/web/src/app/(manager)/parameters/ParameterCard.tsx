@@ -18,11 +18,8 @@ export interface PredictionRow {
 }
 
 const TYPE_LABEL: Record<string, { label: string; desc: string }> = {
-  service_minutes: { label: "服務時間", desc: "每站平均停留時間預估" },
-  stop_demand:     { label: "站點需求", desc: "每家門市的貨量與尖峰日" },
-  eta:             { label: "ETA 預估", desc: "站與站之間的行車時間" },
-  workload:        { label: "員工負荷", desc: "每位物流士的目標工作量" },
-  risk:            { label: "風險評估", desc: "高風險區域與延誤機率" }
+  service_minutes: { label: "服務時間 σ", desc: "OR 約束用：每站平均停留分鐘" },
+  stop_demand:     { label: "站點需求 q", desc: "OR 容量用：每站平均箱數" }
 };
 
 export function ParameterCard({ prediction }: { prediction: PredictionRow }) {

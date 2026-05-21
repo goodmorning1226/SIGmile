@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import { requireManager } from "@/lib/auth/server-auth";
 import { ok, fail, handleApiError } from "@/lib/api/response";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { geocodeAddress } from "@/lib/services/tomtom-geocoding-service";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,7 @@ export async function POST(request: Request) {
     const admin = createSupabaseAdminClient();
     let inserted = 0;
     let updated  = 0;
+    let autoGeocoded = 0;
     const errors: string[] = [];
 
     const normTime = (v: any) => {
@@ -118,6 +120,16 @@ export async function POST(request: Request) {
         notes:               idx.notes    >= 0 ? normStr(row[idx.notes])   : null
       };
 
+      // ★ 自動 geocode：Excel 沒填 lat/lng 但有地址 → 自動 call TomTom 補座標
+      if ((payload.lat == null || payload.lng == null) && payload.address) {
+        const g = await geocodeAddress(payload.address);
+        if (g) {
+          payload.lat = g.lat;
+          payload.lng = g.lng;
+          autoGeocoded++;
+        }
+      }
+
       // 嘗試 update by external_code，否則 insert
       if (payload.external_code) {
         const { data: existing } = await admin
@@ -141,6 +153,7 @@ export async function POST(request: Request) {
     return ok({
       inserted, updated,
       total_rows: rows.length - 1,
+      auto_geocoded: autoGeocoded,
       errors: errors.slice(0, 20)   // 最多 20 筆錯誤
     });
   } catch (e) {

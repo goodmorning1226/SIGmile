@@ -2,15 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Clock, Box, Gauge, Activity, Shield, X } from "lucide-react";
+import { Plus, Clock, Box, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+// 只保留 OR 真的會吃的兩種預測：
+//   - service_minutes → 對應 OR σ_i
+//   - stop_demand     → 對應 OR q_i
+// ETA / 員工負荷 / 風險評估 不在 OR formulation 內，已移除。
 const ALL = [
-  { key: "service_minutes", label: "服務時間",   hint: "平均 / P90 分鐘",          icon: Clock },
-  { key: "stop_demand",     label: "站點需求",   hint: "平均箱數、尖峰日",         icon: Box },
-  { key: "eta",             label: "ETA 預估",   hint: "站與站平均行車時間",       icon: Gauge },
-  { key: "workload",        label: "員工負荷",   hint: "每位 driver 目標站數",      icon: Activity },
-  { key: "risk",            label: "風險評估",   hint: "高風險區域、延誤機率",      icon: Shield }
+  { key: "service_minutes", label: "服務時間 σ", hint: "OR 約束用：每站平均停留分鐘",     icon: Clock },
+  { key: "stop_demand",     label: "站點需求 q", hint: "OR 容量用：每站平均箱數 q_i",     icon: Box }
 ];
 
 interface Props {

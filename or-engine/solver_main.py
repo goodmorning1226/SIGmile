@@ -102,9 +102,11 @@ def main():
         drivers = data["drivers"]
         tau_matrix = data["tau"]
         weights = data.get("weights", {})
-        alpha = float(weights.get("alpha", 1.0))
-        beta  = float(weights.get("beta", 300.0))
-        gamma = float(weights.get("gamma", 1.5))
+        alpha   = float(weights.get("alpha",   1.0))      # 工時成本
+        beta    = float(weights.get("beta",    300.0))    # 派工成本
+        gamma   = float(weights.get("gamma",   1.5))      # 加班成本
+        delta_w = float(weights.get("delta_w", 0.0))      # 工時不平衡懲罰
+        delta_b = float(weights.get("delta_b", 0.0))      # 箱數不平衡懲罰
         num_trips = int(data.get("num_trips", 2))
         time_limit = int(data.get("time_limit_sec", 60))
         mip_gap = float(data.get("mip_gap", 0.05))
@@ -156,6 +158,7 @@ def main():
             shift_node=shift_node, shift_driver=shift_driver,
             capacity=capacity, H_bar=H_bar, H=H,
             alpha=alpha, beta=beta, gamma=gamma,
+            delta_w=delta_w, delta_b=delta_b,
             M=big_M, time_limit_s=time_limit, mip_gap=mip_gap,
         )
 
@@ -170,6 +173,8 @@ def main():
         routes_raw = extract_routes(model, vars_, P, N, R, depot)
         u = vars_["u"]; W = vars_["W"]; O = vars_["O"]
         T = vars_["T"]; Ts = vars_["Ts"]; Te = vars_["Te"]
+        B = vars_["B"]; W_max = vars_["W_max"]; W_min = vars_["W_min"]
+        B_max = vars_["B_max"]; B_min = vars_["B_min"]
 
         idx_to_stop = {0: None}
         for k, s in enumerate(stops, start=1):
@@ -182,6 +187,7 @@ def main():
                 "dispatched": bool(u[p].X > 0.5),
                 "total_work_minutes": float(W[p].X),
                 "overtime_minutes": float(O[p].X),
+                "total_boxes": float(B[p].X),
             })
 
         out_routes = []
@@ -235,6 +241,15 @@ def main():
             "drivers": out_drivers,
             "routes": out_routes,
             "unassigned_stops": [],
+            # 平衡指標（給 UI 顯示「最忙最閒差距」）
+            "balance": {
+                "work_min_range": float(W_max.X - W_min.X),
+                "work_min_max":   float(W_max.X),
+                "work_min_min":   float(W_min.X),
+                "box_range":      float(B_max.X - B_min.X),
+                "box_max":        float(B_max.X),
+                "box_min":        float(B_min.X),
+            },
         }
         print(json.dumps(result))
 

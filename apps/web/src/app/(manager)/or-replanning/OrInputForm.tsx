@@ -4,52 +4,55 @@ import * as React from "react";
 import { Field, FieldGroup } from "@/components/form/Field";
 import { NumberInput } from "@/components/form/NumberInput";
 import { Slider } from "@/components/form/Slider";
-import { Leaf, Clock, Scale, Sliders } from "lucide-react";
 
 /**
- * MTVRP 主管端參數（v2 — 預設模式驅動）。
+ * MTVRP 規劃參數 — 跟 or-engine/vrp_gurobi.py 的全域參數 1:1 對齊。
  *
- * v1 把 α/β slider 直接秀給主管 → 工程師味太重，沒人會調。
- * v2 改成 3 個 preset（省成本 / 準時 / 公平），主管 1 按鈕搞定。
- * 進階模式仍保留 α/β 給有興趣的人微調。
+ * OR 目標式：
+ *   min α·(總工時+服務) + β·(派工人數) + γ·(加班) + δ_W·(W_max−W_min) + δ_B·(B_max−B_min)
  *
- * Preset 映射：
- *   - "eco_cost"   : α=1.0, β=200  (集中派工，省人力 + 燃料)
- *   - "on_time"    : α=2.5, β=80   (時間成本高，多派人換準時)
- *   - "fair_load"  : α=1.5, β=20   (人力成本低 → 分散到所有 driver 公平)
+ * OR 全域參數（這個 UI 只顯示這些）：
+ *   - R     一日趟次（1 或 2）
+ *   - H̄    工時上限（硬約束 F）
+ *   - H     加班門檻（O[p] >= W[p] - H 用，乘 γ）
+ *   - α/β/γ/δ_W/δ_B  目標式 5 個權重
+ *
+ * 不在這裡（OR 不是用全域而是 per-driver / per-stop 抓）：
+ *   - Q 車輛容量 — 從 profiles.vehicle_capacity
+ *   - σ 服務時間 — 從 stops.default_service_minutes
+ *   - q 箱數    — 從 stops.avg_delivery_volume
+ *   - shift 班別 — 從 profiles.shift / stops.shift
+ *   - 班別 / 溫層 相容性 — driver profile vs stops 主檔比對
  */
-export type OrPreset = "eco_cost" | "on_time" | "fair_load" | "custom";
-
 export interface OrInputParams {
   weights: {
-    alpha_travel_time: number;
-    beta_dispatch:     number;
+    alpha_travel_time: number;   // α
+    beta_dispatch:     number;   // β
+    gamma_overtime:    number;   // γ
+    delta_workload:    number;   // δ_W
+    delta_boxes:       number;   // δ_B
   };
-  defaults: {
-    vehicle_capacity_boxes: number;
-    max_work_minutes:       number;
-    service_minutes_default: number;
+  hours: {
+    max_work_minutes:    number;  // H̄（硬上限）
+    overtime_threshold:  number;  // H（加班門檻）
   };
   num_trips: 1 | 2;
-  /** v2 — 用 preset 紀錄主管在 UI 上選的「臉」，便於 audit */
-  preset?: OrPreset;
 }
 
-const PRESET_WEIGHTS: Record<Exclude<OrPreset, "custom">, OrInputParams["weights"]> = {
-  eco_cost: { alpha_travel_time: 1.0, beta_dispatch: 200 },
-  on_time:  { alpha_travel_time: 2.5, beta_dispatch: 80 },
-  fair_load:{ alpha_travel_time: 1.5, beta_dispatch: 20 }
-};
-
 export const DEFAULT_OR_INPUT: OrInputParams = {
-  weights: PRESET_WEIGHTS.on_time,
-  defaults: {
-    vehicle_capacity_boxes: 60,
-    max_work_minutes: 480,
-    service_minutes_default: 10
+  // 預設值對齊 OR/solve_from_matrix_csv.py CONFIG 區
+  weights: {
+    alpha_travel_time: 1.0,
+    beta_dispatch:     300.0,
+    gamma_overtime:    1.5,
+    delta_workload:    1.0,
+    delta_boxes:       0.5
   },
-  num_trips: 2,
-  preset: "on_time"
+  hours: {
+    max_work_minutes:   720,    // 12h
+    overtime_threshold: 480     // 8h
+  },
+  num_trips: 2
 };
 
 interface Props {
@@ -58,101 +61,18 @@ interface Props {
   readOnly?: boolean;
 }
 
-const PRESET_CARDS: Array<{
-  key: Exclude<OrPreset, "custom">;
-  icon: React.ReactNode;
-  label: string;
-  description: string;
-  detail: string;
-  tone: string;
-}> = [
-  {
-    key: "eco_cost",
-    icon: <Leaf className="size-5" />,
-    label: "省成本",
-    description: "集中派少數人，省人力 + 燃料",
-    detail: "適合：淡季 / 量少日 / 想壓人事費",
-    tone: "bg-emerald-50 border-emerald-200 text-emerald-700 hover:border-emerald-400"
-  },
-  {
-    key: "on_time",
-    icon: <Clock className="size-5" />,
-    label: "準時優先",
-    description: "多派人換準時率，避免時間窗違規",
-    detail: "適合：旺季 / 時間窗緊客戶多 / VIP 大單",
-    tone: "bg-amber-50 border-amber-200 text-amber-700 hover:border-amber-400"
-  },
-  {
-    key: "fair_load",
-    icon: <Scale className="size-5" />,
-    label: "工時公平",
-    description: "全員平均，避免有人超載有人閒",
-    detail: "適合：固定編制 / 新人多 / 工會關係",
-    tone: "bg-blue-50 border-blue-200 text-blue-700 hover:border-blue-400"
-  }
-];
-
 export function OrInputForm({ value, onChange, readOnly }: Props) {
-  const [advanced, setAdvanced] = React.useState(value.preset === "custom");
-
-  const selectPreset = (key: Exclude<OrPreset, "custom">) => {
-    if (readOnly) return;
-    onChange({
-      ...value,
-      weights: PRESET_WEIGHTS[key],
-      preset: key
-    });
-    setAdvanced(false);
-  };
-
   const set = <K extends keyof OrInputParams>(k: K, v: OrInputParams[K]) =>
     onChange({ ...value, [k]: v });
+  const setW = (patch: Partial<OrInputParams["weights"]>) =>
+    onChange({ ...value, weights: { ...value.weights, ...patch } });
+  const setH = (patch: Partial<OrInputParams["hours"]>) =>
+    onChange({ ...value, hours: { ...value.hours, ...patch } });
 
   return (
     <div className="space-y-4">
-      {/* Step A: 3 preset cards */}
-      <div>
-        <div className="mb-2 text-sm font-semibold text-slate-800">
-          1. 排線目標
-          <span className="ml-1 font-normal text-xs text-slate-500">
-            (主管選一個就好，OR 會自動套用對應權重)
-          </span>
-        </div>
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-          {PRESET_CARDS.map((card) => {
-            const active = value.preset === card.key;
-            return (
-              <button
-                key={card.key}
-                type="button"
-                disabled={readOnly}
-                onClick={() => selectPreset(card.key)}
-                className={
-                  "flex items-start gap-3 rounded-lg border p-3 text-left transition " +
-                  (active
-                    ? "border-brand-500 bg-brand-50 ring-2 ring-brand-200"
-                    : `border-slate-200 hover:bg-slate-50 ${readOnly ? "cursor-not-allowed opacity-60" : ""}`)
-                }
-              >
-                <div className={
-                  "grid size-9 shrink-0 place-items-center rounded-lg " +
-                  (active ? "bg-brand-100 text-brand-700" : card.tone)
-                }>
-                  {card.icon}
-                </div>
-                <div className="min-w-0">
-                  <div className="font-semibold text-slate-900">{card.label}</div>
-                  <div className="mt-0.5 text-xs text-slate-600">{card.description}</div>
-                  <div className="mt-1 text-[11px] text-slate-400">{card.detail}</div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Step B: 一日趟次 */}
-      <FieldGroup title="2. 一日趟次" description="每位物流士最多回 depot 補貨幾次">
+      {/* 1. 一日趟次（R） */}
+      <FieldGroup title="1. 一日趟次 R" description="每位物流士最多回 depot 補貨幾次（OR 集合 R）">
         <Field label="趟次" className="sm:col-span-2">
           <div className="flex gap-2">
             {([1, 2] as const).map((n) => (
@@ -176,96 +96,115 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
         </Field>
       </FieldGroup>
 
-      {/* Step C: 預設容量 / 工時 */}
+      {/* 2. 工時規則 H̄ / H */}
       <FieldGroup
-        title="3. 預設車輛 / 工時"
-        description="物流士個人檔案有設就以個人為準；以下為 fallback。"
+        title="2. 工時規則"
+        description="H̄ 是硬上限（OR 約束 F），H 是加班門檻（與 γ 一起算超時成本）"
       >
-        <Field label="預設單車容量" suffix="箱">
+        <Field label="H̄ — 工時上限" suffix="分鐘" hint="超過會 infeasible，OR 會 fallback 開新司機">
           <NumberInput
-            value={value.defaults.vehicle_capacity_boxes}
-            onChange={(n) => set("defaults", { ...value.defaults, vehicle_capacity_boxes: n })}
-            min={1} disabled={readOnly}
-          />
-        </Field>
-        <Field label="預設工時上限" suffix="分鐘" hint="超過會 fallback 開新司機">
-          <NumberInput
-            value={value.defaults.max_work_minutes}
-            onChange={(n) => set("defaults", { ...value.defaults, max_work_minutes: n })}
+            value={value.hours.max_work_minutes}
+            onChange={(n) => setH({ max_work_minutes: n })}
             min={60} step={30} disabled={readOnly}
           />
         </Field>
-        <Field label="預設服務時間" suffix="分鐘" hint="停靠點本身沒設定時用">
+        <Field label="H — 加班門檻" suffix="分鐘" hint="超過此值的分鐘乘 γ 加入目標">
           <NumberInput
-            value={value.defaults.service_minutes_default}
-            onChange={(n) => set("defaults", { ...value.defaults, service_minutes_default: n })}
-            min={1} disabled={readOnly}
+            value={value.hours.overtime_threshold}
+            onChange={(n) => setH({ overtime_threshold: n })}
+            min={60} step={30} disabled={readOnly}
           />
         </Field>
       </FieldGroup>
 
-      {/* Step D: 進階展開 */}
-      <button
-        type="button"
-        disabled={readOnly}
-        onClick={() => setAdvanced((a) => !a)}
-        className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+      {/* 3. 5 個 OR 權重 */}
+      <FieldGroup
+        title="3. OR 目標函數權重"
+        description="min α·(總工時) + β·(派工數) + γ·(加班) + δ_W·(工時差距) + δ_B·(箱數差距)"
       >
-        <Sliders className="size-3.5" />
-        {advanced ? "收起進階設定 (α / β)" : "進階：手動調整 α (時間成本) / β (派工成本)"}
-      </button>
+        <Field
+          label="α — 工時成本"
+          hint="越大 → 越在意縮短總配送時間（行駛 + 服務）"
+          className="sm:col-span-2"
+        >
+          <Slider
+            value={value.weights.alpha_travel_time}
+            onChange={(n) => setW({ alpha_travel_time: n })}
+            min={0} max={5} step={0.1}
+            disabled={readOnly}
+            suffix="元/分鐘"
+          />
+        </Field>
 
-      {advanced && (
-        <div className="rounded-lg border border-slate-200 bg-slate-50/30 p-4">
-          <p className="mb-3 text-xs text-slate-500">
-            α 越大 → OR 越想縮短總配送時間。β 越大 → OR 越想集中到少數人。
-            改完會覆蓋上方 preset，preset 顯示「自訂」。
-          </p>
-          <div className="grid grid-cols-1 gap-4">
-            <Field label="α — 配送時間成本" hint="元 / 分鐘" className="sm:col-span-2">
-              <Slider
-                value={value.weights.alpha_travel_time}
-                onChange={(n) => onChange({
-                  ...value,
-                  weights: { ...value.weights, alpha_travel_time: n },
-                  preset: "custom"
-                })}
-                min={0} max={5} step={0.1}
-                disabled={readOnly}
-                suffix="元/分鐘"
-              />
-            </Field>
-            <Field label="β — 派工成本" hint="元 / 人" className="sm:col-span-2">
-              <Slider
-                value={value.weights.beta_dispatch}
-                onChange={(n) => onChange({
-                  ...value,
-                  weights: { ...value.weights, beta_dispatch: n },
-                  preset: "custom"
-                })}
-                min={0} max={1000} step={10}
-                disabled={readOnly}
-                suffix="元/人"
-              />
-            </Field>
-          </div>
-          {value.preset === "custom" && (
-            <div className="mt-2 text-xs text-amber-700">⚠️ 已切換成自訂模式</div>
-          )}
-        </div>
-      )}
+        <Field
+          label="β — 派工成本"
+          hint="越大 → 越想集中派少數人；越小 → 分散到所有 driver。所有啟用的物流士都會被 OR 自動納入。"
+          className="sm:col-span-2"
+        >
+          <Slider
+            value={value.weights.beta_dispatch}
+            onChange={(n) => setW({ beta_dispatch: n })}
+            min={0} max={1000} step={10}
+            disabled={readOnly}
+            suffix="元/人"
+          />
+        </Field>
+
+        <Field
+          label="γ — 加班成本"
+          hint="工時超過 H 的每一分鐘乘上此值加入目標"
+          className="sm:col-span-2"
+        >
+          <Slider
+            value={value.weights.gamma_overtime}
+            onChange={(n) => setW({ gamma_overtime: n })}
+            min={0} max={10} step={0.1}
+            disabled={readOnly}
+            suffix="元/分鐘"
+          />
+        </Field>
+
+        <Field
+          label="δ_W — 工時不平衡懲罰"
+          hint="把 (max W − min W) 乘上此值加入目標。越大 → 工時越平均"
+          className="sm:col-span-2"
+        >
+          <Slider
+            value={value.weights.delta_workload}
+            onChange={(n) => setW({ delta_workload: n })}
+            min={0} max={5} step={0.1}
+            disabled={readOnly}
+            suffix="元/分鐘"
+          />
+        </Field>
+
+        <Field
+          label="δ_B — 箱數不平衡懲罰"
+          hint="把 (max B − min B) 乘上此值加入目標。越大 → 各 driver 載運箱數越平均"
+          className="sm:col-span-2"
+        >
+          <Slider
+            value={value.weights.delta_boxes}
+            onChange={(n) => setW({ delta_boxes: n })}
+            min={0} max={5} step={0.1}
+            disabled={readOnly}
+            suffix="元/箱"
+          />
+        </Field>
+      </FieldGroup>
     </div>
   );
 }
 
 /**
  * 把任意 JSON 物件（可能來自舊版 DB）解析成 OrInputParams，缺欄位用 default 補。
+ * 支援舊版 `defaults.{max_work_minutes,vehicle_capacity_boxes,service_minutes_default}`
+ * 但只取 max_work_minutes（其餘改為 per-driver / per-stop master data）。
  */
 export function parseOrInputParams(raw: unknown): OrInputParams {
   const r = (raw ?? {}) as Record<string, any>;
   const tripsRaw = Number(r?.num_trips);
   const trips = tripsRaw === 1 ? 1 : 2;
-  const preset = typeof r?.preset === "string" ? r.preset as OrPreset : undefined;
   return {
     weights: {
       alpha_travel_time: Number(
@@ -273,26 +212,28 @@ export function parseOrInputParams(raw: unknown): OrInputParams {
       ),
       beta_dispatch: Number(
         r?.weights?.beta_dispatch ?? DEFAULT_OR_INPUT.weights.beta_dispatch
+      ),
+      gamma_overtime: Number(
+        r?.weights?.gamma_overtime ?? DEFAULT_OR_INPUT.weights.gamma_overtime
+      ),
+      delta_workload: Number(
+        r?.weights?.delta_workload ?? DEFAULT_OR_INPUT.weights.delta_workload
+      ),
+      delta_boxes: Number(
+        r?.weights?.delta_boxes ?? DEFAULT_OR_INPUT.weights.delta_boxes
       )
     },
-    defaults: {
-      vehicle_capacity_boxes: Number(
-        r?.defaults?.vehicle_capacity_boxes
-          ?? r?.vehicle_capacity_boxes
-          ?? DEFAULT_OR_INPUT.defaults.vehicle_capacity_boxes
-      ),
+    hours: {
       max_work_minutes: Number(
-        r?.defaults?.max_work_minutes
-          ?? r?.workload?.max_minutes_per_driver
-          ?? DEFAULT_OR_INPUT.defaults.max_work_minutes
+        r?.hours?.max_work_minutes
+          ?? r?.defaults?.max_work_minutes
+          ?? DEFAULT_OR_INPUT.hours.max_work_minutes
       ),
-      service_minutes_default: Number(
-        r?.defaults?.service_minutes_default
-          ?? r?.service_minutes?.mean
-          ?? DEFAULT_OR_INPUT.defaults.service_minutes_default
+      overtime_threshold: Number(
+        r?.hours?.overtime_threshold
+          ?? DEFAULT_OR_INPUT.hours.overtime_threshold
       )
     },
-    num_trips: trips,
-    preset
+    num_trips: trips
   };
 }

@@ -78,7 +78,10 @@ export default async function PublishRoutePage() {
         .order("prediction_type", { ascending: true })
     : { data: [] };
 
-  const predictions = (paramsRows ?? []) as PredictionRow[];
+  // 只顯示 OR 真的會吃的兩種 (σ / q)；舊資料如 eta/workload/risk 直接過濾掉
+  const OR_USED = new Set(["service_minutes", "stop_demand"]);
+  const predictions = ((paramsRows ?? []) as PredictionRow[])
+    .filter((p) => OR_USED.has(p.prediction_type));
 
   return (
     <>
