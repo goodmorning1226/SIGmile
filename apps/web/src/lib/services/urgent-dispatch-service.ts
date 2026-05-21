@@ -412,7 +412,15 @@ export async function suggestUrgentDispatch(urgentId: string): Promise<{
 export async function applyUrgentDispatch(
   urgentId: string,
   driverId: string
-): Promise<{ urgent: UrgentShipment; inserted_task_stop_id: string; insertion_position: number }> {
+): Promise<{
+  urgent: UrgentShipment;
+  inserted_task_stop_id: string;
+  insertion_position: number;
+  /** 是否自動為該 driver 新建了今日 task（原本沒有） */
+  task_auto_created: boolean;
+  /** 用到的 task 的 delivery_date — 給 UI 顯示 */
+  delivery_date: string;
+}> {
   const u = getUrgent(urgentId);
   if (!u) throw new Error(`Urgent ${urgentId} not found`);
   if (u.status !== "pending") throw new Error(`Urgent ${urgentId} 已派 — 狀態 ${u.status}`);
@@ -420,13 +428,24 @@ export async function applyUrgentDispatch(
   const admin = createSupabaseAdminClient();
   const today = todayInTaipei();
 
-  // 找該 driver 今天的 task；找不到就找最近一天當 dev fallback
-  let { data: task } = await admin
+  // 找該 driver 今天的 task；步驟：
+  //   1) 今天有 → 用今天
+  //   2) 今天沒、最近一天有 → 用最近一天（demo 友善）
+  //   3) 都沒 → 直接幫 driver 建一筆今天的 task（急件本來就該能派給沒排班的人）
+  type TaskMini = {
+    id: string; driver_id: string; delivery_date: string;
+    status: string; driver_route_assignment_id: string | null;
+  };
+
+  let task: TaskMini | null = null;
+  const { data: todayTask } = await admin
     .from("delivery_tasks")
     .select("id, driver_id, delivery_date, status, driver_route_assignment_id")
     .eq("driver_id", driverId)
     .eq("delivery_date", today)
-    .maybeSingle<{ id: string; driver_id: string; delivery_date: string; status: string; driver_route_assignment_id: string | null }>();
+    .maybeSingle<TaskMini>();
+  task = todayTask ?? null;
+
   if (!task) {
     const { data: latest } = await admin
       .from("delivery_tasks")
@@ -434,11 +453,38 @@ export async function applyUrgentDispatch(
       .eq("driver_id", driverId)
       .order("delivery_date", { ascending: false })
       .limit(1)
-      .maybeSingle<{ id: string; driver_id: string; delivery_date: string; status: string; driver_route_assignment_id: string | null }>();
-    task = latest;
+      .maybeSingle<TaskMini>();
+    task = latest ?? null;
   }
+
+  let autoCreated = false;
   if (!task) {
-    throw new Error("該物流士今日（或任何一天）尚無 delivery_task，無法插入急件");
+    // 還是沒有 → 自動建立今天的 task，把急件當第 1 站
+    const { data: created, error: createErr } = await admin
+      .from("delivery_tasks")
+      .insert({
+        driver_id: driverId,
+        delivery_date: today,
+        status: "pending"
+      })
+      .select("id, driver_id, delivery_date, status, driver_route_assignment_id")
+      .single<TaskMini>();
+    if (createErr || !created) {
+      throw new Error(
+        `物流士 ${driverId} 今日無 task，自動建立失敗：${createErr?.message ?? "unknown"}。` +
+        `可能原因：必填欄位不足（distribution_center_id / 等等）、RLS 阻擋、或 driver_id 不存在。`
+      );
+    }
+    task = created;
+    autoCreated = true;
+  }
+
+  // 若是 cancelled 狀態（先前翹班），急件進來等於重新啟用 → 改回 pending
+  if (task.status === "cancelled") {
+    await admin
+      .from("delivery_tasks")
+      .update({ status: "pending" })
+      .eq("id", task.id);
   }
 
   // 找 driver 名字
@@ -489,7 +535,9 @@ export async function applyUrgentDispatch(
   return {
     urgent: u,
     inserted_task_stop_id: inserted!.id,
-    insertion_position: nextOrder
+    insertion_position: nextOrder,
+    task_auto_created: autoCreated,
+    delivery_date: task.delivery_date
   };
 }
 

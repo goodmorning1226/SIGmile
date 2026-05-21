@@ -152,6 +152,14 @@ export function UrgentBoard() {
         setError(j.error?.message ?? "派遣寫入失敗");
         return;
       }
+      const d = j.data as {
+        inserted_task_stop_id: string; insertion_position: number;
+        task_auto_created?: boolean; delivery_date?: string;
+      };
+      if (d.task_auto_created) {
+        // 不擋流程，只是 console + 訊息提示，後面 refresh
+        console.info(`[urgent] 自動為此 driver 建立 ${d.delivery_date} 的 delivery_task（先前無）`);
+      }
       setDispatchResult(null);
       refresh();
     } catch (e) {

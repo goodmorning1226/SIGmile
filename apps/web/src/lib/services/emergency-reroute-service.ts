@@ -36,8 +36,7 @@ interface TaskStopRow {
   status: string;
   planned_arrival_at: string | null;
   actual_arrival_at: string | null;
-  estimated_service_minutes: number | null;
-  estimated_volume: number | null;
+  // delivery_task_stops 沒存 estimated_*；統一從 stops 主檔 derive
   stop: {
     id: string;
     name: string;
@@ -46,10 +45,14 @@ interface TaskStopRow {
     lng: number | null;
     temperature_type: string | null;
     shift: string | null;
+    avg_delivery_volume: number | null;
+    default_service_minutes: number | null;
   } | Array<{
     id: string; name: string; external_code: string | null;
     lat: number | null; lng: number | null;
     temperature_type: string | null; shift: string | null;
+    avg_delivery_volume: number | null;
+    default_service_minutes: number | null;
   }> | null;
 }
 
@@ -168,8 +171,8 @@ export async function getTodaySnapshot(opts: { date?: string } = {}): Promise<{
     .select(
       "id, delivery_task_id, stop_id, stop_order, trip_index, status, " +
         "planned_arrival_at, actual_arrival_at, " +
-        "estimated_service_minutes, estimated_volume, " +
-        "stop:stops(id, name, external_code, lat, lng, temperature_type, shift)"
+        "stop:stops(id, name, external_code, lat, lng, temperature_type, shift, " +
+        "avg_delivery_volume, default_service_minutes)"
     )
     .in("delivery_task_id", taskIds)
     .order("stop_order", { ascending: true })
@@ -223,8 +226,9 @@ export async function planReroute(opts: {
     .from("delivery_task_stops")
     .select(
       "id, delivery_task_id, stop_id, stop_order, trip_index, status, " +
-        "planned_arrival_at, estimated_service_minutes, estimated_volume, " +
-        "stop:stops(id, name, external_code, lat, lng, temperature_type, shift)"
+        "planned_arrival_at, actual_arrival_at, " +
+        "stop:stops(id, name, external_code, lat, lng, temperature_type, shift, " +
+        "avg_delivery_volume, default_service_minutes)"
     )
     .eq("delivery_task_id", down.task_id)
     .in("status", ["pending", "navigating"])
@@ -265,16 +269,22 @@ export async function planReroute(opts: {
       .from("delivery_task_stops")
       .select(
         "id, delivery_task_id, stop_id, stop_order, status, " +
-          "estimated_volume, stop:stops(lat, lng, temperature_type)"
+          "stop:stops(lat, lng, temperature_type, avg_delivery_volume)"
       )
       .in("delivery_task_id", candidateTaskIds)
       .order("stop_order", { ascending: true })
       .returns<Array<{
         id: string; delivery_task_id: string; stop_id: string;
         stop_order: number; status: string;
-        estimated_volume: number | null;
-        stop: { lat: number | null; lng: number | null; temperature_type: string | null } |
-          Array<{ lat: number | null; lng: number | null; temperature_type: string | null }> | null;
+        stop: {
+          lat: number | null; lng: number | null;
+          temperature_type: string | null;
+          avg_delivery_volume: number | null;
+        } | Array<{
+          lat: number | null; lng: number | null;
+          temperature_type: string | null;
+          avg_delivery_volume: number | null;
+        }> | null;
       }>>();
   const candidateStopMap = new Map<string, Array<{
     id: string;
@@ -296,7 +306,7 @@ export async function planReroute(opts: {
           lat: Number(st.lat),
           lng: Number(st.lng),
           status: s.status,
-          demand: s.estimated_volume ?? 0,
+          demand: st.avg_delivery_volume ?? 0,
           temperature: st.temperature_type ?? null
         };
       })
@@ -336,7 +346,7 @@ export async function planReroute(opts: {
       continue;
     }
     const stopPos: LatLng = { lat: Number(stopMeta.lat), lng: Number(stopMeta.lng) };
-    const demand = stop.estimated_volume ?? 0;
+    const demand = stopMeta.avg_delivery_volume ?? 0;
     const tempReq = stopMeta.temperature_type ?? "ambient";
     const shiftReq = stopMeta.shift ?? null;
 
