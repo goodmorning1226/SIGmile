@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState, useTransition, useRef, useEffect } from "react";
+import { useMemo, useState, useTransition, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
@@ -18,6 +18,16 @@ import {
 import type {
   ClusterStop, PlanForEdit, DriverOption
 } from "@/lib/services/cluster-service";
+
+/* ============================================================
+ * 拖曳資料型別
+ * ========================================================== */
+interface DragSlot {
+  /** 插入位置：插入後該 stop 會在 stops 陣列的 index = insertAt（0..N） */
+  insertAt: number;
+  /** 該 slot 代表的 trip_index（分隔線左側為 1、右側為 2） */
+  trip: 1 | 2;
+}
 
 /* ============================================================
  * 內部編輯狀態（按「儲存」才寫回 server）
@@ -84,23 +94,22 @@ export function RouteAssignmentBoard({
   };
 
   /**
-   * insert-only：把第 fromIdx 的 stop 移到 slot 位置（0..N）。
-   * 同時依「captured 分隔線位置 boundaryAtDragStart」決定新的 trip_index。
+   * insert-only：把第 fromIdx 的 stop 移到 insertAt 位置（0..N），並指定 trip_index。
+   * trip 由 RouteStrip 端依「該 slot 視覺上位於 trip 分隔線哪一側」決定。
    */
   const insertStopAtSlot = (
     cid: string,
     fromIdx: number,
-    slot: number,
-    boundaryAtDragStart: number
+    insertAt: number,
+    newTrip: 1 | 2
   ) => {
     setClusters((cs) => cs.map((c) => {
       if (c.id !== cid) return c;
-      const newTrip: 1 | 2 = slot < boundaryAtDragStart ? 1 : 2;
       const arr = [...c.stops];
       const [moved] = arr.splice(fromIdx, 1);
-      // 移除後重算 insertAt
-      const insertAt = slot > fromIdx ? slot - 1 : slot;
-      arr.splice(insertAt, 0, { ...moved, trip_index: newTrip });
+      // 移除後重算實際 insert index
+      const adjusted = insertAt > fromIdx ? insertAt - 1 : insertAt;
+      arr.splice(adjusted, 0, { ...moved, trip_index: newTrip });
       return { ...c, stops: arr };
     }));
   };
@@ -248,8 +257,8 @@ export function RouteAssignmentBoard({
             ttMap={ttMap}
             readOnly={readOnly}
             onChangeDriver={(did) => setDriverFor(c.id, did)}
-            onInsertStop={(from, slot, boundary) =>
-              insertStopAtSlot(c.id, from, slot, boundary)
+            onInsertStop={(from, insertAt, trip) =>
+              insertStopAtSlot(c.id, from, insertAt, trip)
             }
             onMoveStopOut={(sIdx, toCid) => moveStopBetweenClusters(c.id, sIdx, toCid)}
           />
@@ -271,8 +280,8 @@ interface RouteStripProps {
   ttMap: Map<string, number>;
   readOnly: boolean;
   onChangeDriver: (driverId: string | null) => void;
-  /** insert-only：fromIdx 的 stop 移到 slot；boundary 是 drag 開始時擷取的 trip 分隔線 */
-  onInsertStop: (fromIdx: number, slot: number, boundary: number) => void;
+  /** insert-only：fromIdx 的 stop 移到 insertAt（0..N），新的 trip_index 由 caller 決定 */
+  onInsertStop: (fromIdx: number, insertAt: number, trip: 1 | 2) => void;
   onMoveStopOut: (stopIdx: number, toClusterId: string) => void;
 }
 
@@ -302,39 +311,54 @@ function RouteStrip({
 
   // ───── 拖曳狀態：insert-only ─────
   //  - dragSrcIdx：被拖站的 index
-  //  - dragOverSlot：滑鼠當下 hover 的「插入槽」index（0 = 第一站之前；N = 最後一站之後）
-  //  - dragBoundary：drag 開始時 capture 的 trip 分隔線位置（拖動時保持不變）
+  //  - dragOverSlot：滑鼠當下 hover 的「插入槽」(insertAt + trip 一起記)
+  //    insertAt = 插入後的目標 index（0..N）；trip = 該位置代表的 trip_index
+  //    分隔線兩側會各有一個 slot（insertAt 相同、trip 不同）讓使用者明確選擇
   const [dragSrcIdx, setDragSrcIdx] = useState<number | null>(null);
-  const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
-  const [dragBoundary, setDragBoundary] = useState<number | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<DragSlot | null>(null);
 
-  // 自然 trip 分隔線位置 = 第一個 trip_index==2 的 index；都是 trip-1 則回 stops.length
-  const naturalBoundary = useMemo(() => {
+  // trip 分隔線位置 = 第一個 trip_index==2 的 index；都是 trip-1 則回 stops.length
+  //  拖動期間 cluster.stops 不會被改寫（drop 才寫入），所以這個位置在拖動時自然鎖住，
+  //  不需要額外 capture。
+  const visualBoundary = useMemo(() => {
     const i = cluster.stops.findIndex((s) => s.trip_index === 2);
     return i === -1 ? cluster.stops.length : i;
   }, [cluster.stops]);
 
-  // 拖動中以 capture 的為主；沒拖動則用自然位置
-  const visualBoundary = dragBoundary ?? naturalBoundary;
   const isDragging = dragSrcIdx != null;
 
   const onDragStart = (srcIdx: number) => {
     setDragSrcIdx(srcIdx);
-    setDragBoundary(naturalBoundary);
   };
   const onDragEnd = () => {
     setDragSrcIdx(null);
     setDragOverSlot(null);
-    setDragBoundary(null);
   };
-  const onDropAtSlot = (slot: number) => {
-    if (dragSrcIdx == null || dragBoundary == null) {
+
+  // ❗ 安全網：browser native dragend 應該在 source 上觸發，但某些情況（source
+  // 被 unmount、drop 在 iframe、ESC 取消…）會錯過。
+  // 在 window 層面再掛一次 dragend，確保 state 一定被清乾淨。
+  useEffect(() => {
+    if (!isDragging) return;
+    const cleanup = () => {
+      setDragSrcIdx(null);
+      setDragOverSlot(null);
+    };
+    window.addEventListener("dragend", cleanup);
+    return () => window.removeEventListener("dragend", cleanup);
+  }, [isDragging]);
+  const onDropAtSlot = (insertAt: number, trip: 1 | 2) => {
+    if (dragSrcIdx == null) {
       onDragEnd();
       return;
     }
-    onInsertStop(dragSrcIdx, slot, dragBoundary);
+    onInsertStop(dragSrcIdx, insertAt, trip);
     onDragEnd();
   };
+  const isSlotActive = (insertAt: number, trip: 1 | 2) =>
+    dragOverSlot != null &&
+    dragOverSlot.insertAt === insertAt &&
+    dragOverSlot.trip === trip;
 
   // 點擊 stop 時 popover state
   const [popoverIdx, setPopoverIdx] = useState<number | null>(null);
@@ -413,87 +437,63 @@ function RouteStrip({
             className="flex flex-nowrap items-center gap-0 overflow-x-auto"
             style={{ overflowY: "visible" }}
           >
-            {/* depot start */}
-            {depotId && <DepotNode label="DC" />}
-
-            {/* slot 0：最前面（拖動時才顯示） */}
-            <DropSlot
-              visible={isDragging}
-              active={dragOverSlot === 0}
-              onDragOver={() => setDragOverSlot(0)}
-              onDrop={() => onDropAtSlot(0)}
-            />
-
-            {cluster.stops.map((s, si) => {
-              const prevStop  = si === 0 ? null : cluster.stops[si - 1];
-              const prevId    = prevStop?.stop_id ?? depotId;
-              // trip 分隔線位置 = visualBoundary，固定不會隨拖動移動
-              const isTripBreakHere = visualBoundary === si && si > 0 && depotId != null;
-
-              return (
-                <Fragment key={s.route_stop_id}>
-                  {/* 一日二配邊界：上一站 → 回 DC → 分隔線 → DC 出 → 下一站 */}
-                  {isTripBreakHere && prevStop && depotId && (
-                    <>
-                      {!isDragging && (
-                        <TravelArrow minutes={ttMap.get(`${prevStop.stop_id}>${depotId}`)} />
-                      )}
-                      <DepotNode label="回 DC" dashed />
-                      <TripDivider />
-                      <DepotNode label="DC 出" dashed />
-                      {!isDragging && (
-                        <TravelArrow minutes={ttMap.get(`${depotId}>${s.stop_id}`)} />
-                      )}
-                    </>
-                  )}
-
-                  {/* 一般站間箭頭（非 trip break、非拖動中才顯示時間） */}
-                  {!isTripBreakHere && !isDragging && (depotId || si > 0) && (
-                    <TravelArrow minutes={prevId ? ttMap.get(`${prevId}>${s.stop_id}`) : undefined} />
-                  )}
-
-                  <StopBox
-                    stop={s}
-                    index={si}
-                    readOnly={readOnly}
-                    isDragSource={dragSrcIdx === si}
-                    onDragStart={() => onDragStart(si)}
-                    onDragEnd={onDragEnd}
-                    onClick={() => {
-                      if (readOnly) return;
-                      setPopoverIdx(popoverIdx === si ? null : si);
-                    }}
-                    showPopover={popoverIdx === si && !readOnly}
-                    onClosePopover={() => setPopoverIdx(null)}
-                    otherClusters={otherClusters}
-                    onMoveTo={(toCid) => {
-                      setPopoverIdx(null);
-                      onMoveStopOut(si, toCid);
-                    }}
-                  />
-
-                  {/* 每個站後面都接一個 drop slot（拖動時才顯示） */}
-                  <DropSlot
-                    visible={isDragging}
-                    active={dragOverSlot === si + 1}
-                    onDragOver={() => setDragOverSlot(si + 1)}
-                    onDrop={() => onDropAtSlot(si + 1)}
-                  />
-                </Fragment>
-              );
+            {/*
+              ────────────────────────────────────────────────────
+              關鍵：每個 StopBox 用 stop-${route_stop_id} 當 stable key，
+              讓 React 在 cluster.stops 重排後仍視為「同一個 DOM 節點」，
+              拖動中的 source 不會被卸載 → native dragend 才會正常觸發、
+              dragSrcIdx 才會被清乾淨，後續才能繼續拖。
+              ────────────────────────────────────────────────────
+            */}
+            {buildStripItems({
+              stops: cluster.stops,
+              depotId,
+              visualBoundary,
+              isDragging,
+              ttMap
+            }).map((it) => {
+              switch (it.kind) {
+                case "depot":
+                  return <DepotNode key={it.key} label={it.label} dashed={it.dashed} />;
+                case "arrow":
+                  return <TravelArrow key={it.key} minutes={it.minutes} />;
+                case "divider":
+                  return <TripDivider key={it.key} />;
+                case "slot":
+                  return (
+                    <DropSlot
+                      key={it.key}
+                      visible
+                      active={isSlotActive(it.insertAt, it.trip)}
+                      onDragOver={() => setDragOverSlot({ insertAt: it.insertAt, trip: it.trip })}
+                      onDrop={() => onDropAtSlot(it.insertAt, it.trip)}
+                    />
+                  );
+                case "stop":
+                  return (
+                    <StopBox
+                      key={it.key}
+                      stop={it.stop}
+                      index={it.index}
+                      readOnly={readOnly}
+                      isDragSource={dragSrcIdx === it.index}
+                      onDragStart={() => onDragStart(it.index)}
+                      onDragEnd={onDragEnd}
+                      onClick={() => {
+                        if (readOnly) return;
+                        setPopoverIdx(popoverIdx === it.index ? null : it.index);
+                      }}
+                      showPopover={popoverIdx === it.index && !readOnly}
+                      onClosePopover={() => setPopoverIdx(null)}
+                      otherClusters={otherClusters}
+                      onMoveTo={(toCid) => {
+                        setPopoverIdx(null);
+                        onMoveStopOut(it.index, toCid);
+                      }}
+                    />
+                  );
+              }
             })}
-
-            {/* depot end */}
-            {depotId && (
-              <>
-                {!isDragging && (
-                  <TravelArrow
-                    minutes={ttMap.get(`${cluster.stops[cluster.stops.length - 1].stop_id}>${depotId}`)}
-                  />
-                )}
-                <DepotNode label="DC" />
-              </>
-            )}
           </div>
         )}
       </CardContent>
@@ -524,14 +524,14 @@ function StopBox({
   isDragSource, onDragStart, onDragEnd,
   onClick, showPopover, onClosePopover, otherClusters, onMoveTo
 }: StopBoxProps) {
-  const btnRef = useRef<HTMLButtonElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const [hovering, setHovering] = useState(false);
   const [tipPos, setTipPos] = useState<{ left: number; top: number } | null>(null);
   const [popPos, setPopPos] = useState<{ left: number; top: number } | null>(null);
 
   const updatePos = (setter: (p: { left: number; top: number }) => void) => {
-    if (!btnRef.current) return;
-    const rect = btnRef.current.getBoundingClientRect();
+    if (!boxRef.current) return;
+    const rect = boxRef.current.getBoundingClientRect();
     setter({
       left: rect.left + rect.width / 2,
       top:  rect.bottom + window.scrollY + 6
@@ -553,18 +553,35 @@ function StopBox({
 
   return (
     <>
-      <button
-        ref={btnRef}
-        type="button"
+      <div
+        ref={boxRef}
+        role="button"
+        tabIndex={readOnly ? -1 : 0}
         draggable={!readOnly}
         onDragStart={(e) => {
+          if (readOnly) {
+            e.preventDefault();
+            return;
+          }
           e.dataTransfer.effectAllowed = "move";
-          // 設一些 payload 才能在某些瀏覽器啟動拖動
+          // 帶上 payload，Firefox 與部分 Chromium 啟動拖動需要
           try { e.dataTransfer.setData("text/plain", String(index)); } catch {}
+          // 用 box 本身當 drag image，位置貼到正中間
+          if (boxRef.current) {
+            const r = boxRef.current.getBoundingClientRect();
+            e.dataTransfer.setDragImage(boxRef.current, r.width / 2, r.height / 2);
+          }
+          // 關掉 hover tooltip，避免拖動中遮擋
+          setHovering(false);
           onDragStart();
         }}
         onDragEnd={onDragEnd}
-        onClick={onClick}
+        onClick={(e) => {
+          // 排除 drag 後的合成 click
+          if (isDragSource) return;
+          onClick();
+          e.stopPropagation();
+        }}
         onMouseEnter={() => {
           setHovering(true);
           updatePos(setTipPos);
@@ -572,11 +589,11 @@ function StopBox({
         onMouseLeave={() => setHovering(false)}
         className={cn(
           "relative flex h-16 min-w-[6.5rem] flex-col items-center justify-center",
-          "rounded-md border bg-white px-3 text-sm transition",
+          "rounded-md border bg-white px-3 text-sm transition select-none",
           "shrink-0",
           readOnly
             ? "border-slate-200 cursor-default"
-            : "border-slate-300 cursor-pointer hover:border-brand-400 hover:shadow-sm",
+            : "border-slate-300 cursor-grab active:cursor-grabbing hover:border-brand-400 hover:shadow-sm",
           isDragSource && "opacity-40 ring-2 ring-brand-300"
         )}
       >
@@ -592,7 +609,7 @@ function StopBox({
         <span className="truncate max-w-[6rem] font-medium text-slate-900">
           {stop.stop_name}
         </span>
-      </button>
+      </div>
 
       {/* hover tooltip — portal 到 body，永遠在最上層、不會撐高 strip */}
       {hovering && !showPopover && tipPos && typeof document !== "undefined" && createPortal(
@@ -701,10 +718,108 @@ function TripDivider() {
 }
 
 /* ============================================================
- * DropSlot — 拖動時站與站之間的虛線插入格
- *  - visible=false 完全不渲染
- *  - active=true（滑鼠 hover 此 slot）→ 展開顯示虛線格
- *  - active=false → 維持很細的觸發區，使滑鼠掃過時可以切換 active slot
+ * buildStripItems — 把一條路線攤平成「stable-key 的元素描述列表」。
+ *
+ * 關鍵：每個 StopBox 用 stop-${route_stop_id} 當 key，即使 cluster.stops
+ * 重排（trip 邊界換位置 / 站順序變動），React 也會把舊 DOM 節點認回給
+ * 同一個 StopBox，不會 unmount/mount。
+ * 拖動中的 source 不被卸載 → native dragend 才能正常觸發、state 才會清乾淨，
+ * 後續才能繼續拖。
+ * ========================================================== */
+type StripItem =
+  | { kind: "depot"; key: string; label: string; dashed?: boolean }
+  | { kind: "arrow"; key: string; minutes: number | undefined }
+  | { kind: "divider"; key: string }
+  | { kind: "slot"; key: string; insertAt: number; trip: 1 | 2 }
+  | { kind: "stop"; key: string; stop: ClusterStop; index: number };
+
+function buildStripItems({
+  stops, depotId, visualBoundary, isDragging, ttMap
+}: {
+  stops: ClusterStop[];
+  depotId: string | null;
+  visualBoundary: number;
+  isDragging: boolean;
+  ttMap: Map<string, number>;
+}): StripItem[] {
+  const items: StripItem[] = [];
+  const N = stops.length;
+  const B = visualBoundary;
+
+  if (depotId) items.push({ kind: "depot", key: "dc-start", label: "DC" });
+
+  for (let i = 0; i <= N; i++) {
+    const showDivider = i === B && i > 0 && i < N && depotId != null;
+    const prevStop = i === 0 ? null : stops[i - 1];
+    const curStop  = i < N ? stops[i] : null;
+
+    if (showDivider && prevStop && curStop && depotId) {
+      // 左側：trip-1 slot（拖動中）/ 站→DC 箭頭（非拖動）
+      if (isDragging) {
+        items.push({ kind: "slot", key: `slot-${i}-L`, insertAt: i, trip: 1 });
+      } else {
+        items.push({
+          kind: "arrow",
+          key: `ta-back-${i}`,
+          minutes: ttMap.get(`${prevStop.stop_id}>${depotId}`)
+        });
+      }
+      items.push({ kind: "depot",   key: `dc-back-${i}`, label: "回 DC", dashed: true });
+      items.push({ kind: "divider", key: `div-${i}` });
+      items.push({ kind: "depot",   key: `dc-out-${i}`,  label: "DC 出", dashed: true });
+      // 右側：trip-2 slot / DC→站 箭頭
+      if (isDragging) {
+        items.push({ kind: "slot", key: `slot-${i}-R`, insertAt: i, trip: 2 });
+      } else {
+        items.push({
+          kind: "arrow",
+          key: `ta-out-${i}`,
+          minutes: ttMap.get(`${depotId}>${curStop.stop_id}`)
+        });
+      }
+    } else {
+      // 一般位置：拖動中 slot，否則 arrow
+      if (isDragging) {
+        const trip: 1 | 2 = i < B ? 1 : 2;
+        items.push({ kind: "slot", key: `slot-${i}`, insertAt: i, trip });
+      } else if (i === 0 && depotId && curStop) {
+        items.push({
+          kind: "arrow", key: `ta-${i}`,
+          minutes: ttMap.get(`${depotId}>${curStop.stop_id}`)
+        });
+      } else if (i > 0 && i < N && prevStop && curStop) {
+        items.push({
+          kind: "arrow", key: `ta-${i}`,
+          minutes: ttMap.get(`${prevStop.stop_id}>${curStop.stop_id}`)
+        });
+      } else if (i === N && depotId && prevStop) {
+        items.push({
+          kind: "arrow", key: `ta-end`,
+          minutes: ttMap.get(`${prevStop.stop_id}>${depotId}`)
+        });
+      }
+    }
+
+    if (curStop) {
+      items.push({
+        kind: "stop",
+        key: `stop-${curStop.route_stop_id}`,  // ★ stable key = DB id
+        stop: curStop,
+        index: i
+      });
+    }
+  }
+
+  if (depotId) items.push({ kind: "depot", key: "dc-end", label: "DC" });
+
+  return items;
+}
+
+/* ============================================================
+ * DropSlot — 拖動時站與站之間的插入點。
+ *  - 寬度恆定 (w-6)，active 時用 absolute overlay 顯示「放開插入」提示；
+ *    不會撐開 layout → 避免 native drag 因 layout shift 跟丟。
+ *  - 已 active 時不再呼叫 onDragOver，避免每秒幾十次 setState。
  * ========================================================== */
 function DropSlot({
   visible, active, onDragOver, onDrop
@@ -715,21 +830,30 @@ function DropSlot({
   onDrop: () => void;
 }) {
   if (!visible) return null;
+  const handleOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    // 已經 active 就不再 setState，避免每個 dragover frame 都觸發 re-render
+    if (!active) onDragOver();
+  };
   return (
     <div
-      onDragOver={(e) => { e.preventDefault(); onDragOver(); }}
-      onDrop={(e) => { e.preventDefault(); onDrop(); }}
-      className={cn(
-        "h-16 flex items-center justify-center transition-all shrink-0",
-        active
-          ? "w-[6.5rem] mx-1 rounded-md border-2 border-dashed border-brand-500 bg-brand-50"
-          : "w-3"
-      )}
+      onDragEnter={handleOver}
+      onDragOver={handleOver}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDrop();
+      }}
+      className="relative h-16 w-6 shrink-0"
     >
       {active && (
-        <span className="text-[10px] font-medium text-brand-600 select-none">
-          放開插入
-        </span>
+        <div
+          className="absolute inset-y-0 -left-1 -right-1 grid place-items-center rounded-md border-2 border-dashed border-brand-500 bg-brand-50 pointer-events-none"
+        >
+          <span className="text-[10px] font-medium text-brand-600 select-none">
+            放開插入
+          </span>
+        </div>
       )}
     </div>
   );

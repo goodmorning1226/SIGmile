@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Truck, Send, History, LogOut, Layers,
-  Zap, LifeBuoy, BrainCircuit, CalendarDays
+  Zap, LifeBuoy
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -21,13 +21,6 @@ const NAV: readonly NavGroup[] = [
     ]
   },
   {
-    title: "即時應變",
-    items: [
-      { href: "/urgent",    label: "急件派遣", icon: Zap },
-      { href: "/emergency", label: "緊急應變", icon: LifeBuoy }
-    ]
-  },
-  {
     title: "路線管理",
     items: [
       { href: "/or-replanning",  label: "發布新路線", icon: Send },
@@ -36,10 +29,10 @@ const NAV: readonly NavGroup[] = [
     ]
   },
   {
-    title: "分析",
+    title: "即時應變",
     items: [
-      { href: "/insights",            label: "AI 深度分析", icon: BrainCircuit },
-      { href: "/quarterly-analysis",  label: "季度分析",   icon: CalendarDays }
+      { href: "/urgent",    label: "急件派遣", icon: Zap },
+      { href: "/emergency", label: "緊急應變", icon: LifeBuoy }
     ]
   }
 ];
@@ -96,7 +89,6 @@ export function Sidebar({ userName }: { userName: string }) {
                     >
                       <Icon className={cn("h-4 w-4", active ? "text-brand-600" : "text-slate-400 group-hover:text-slate-600")} />
                       {item.label}
-                      {active && <span className="ml-auto size-1.5 rounded-full bg-brand-600" />}
                     </Link>
                   </li>
                 );
