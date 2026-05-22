@@ -49,6 +49,33 @@ interface StopCandidatesResp {
   context: { drivers_evaluated: number; date: string };
 }
 
+interface ReassignedStop {
+  task_stop_id: string;
+  stop_id: string;
+  stop_name: string;
+  from_driver_id: string;
+  from_driver_name: string;
+  to_driver_id: string | null;
+  to_driver_name: string | null;
+  insertion_after_index: number | null;
+  delta_km: number;
+  reason: string;
+  unassign_reason: string | null;
+}
+
+interface ReroutePlan {
+  date: string;
+  down_driver: DriverSnapshot;
+  reassigned: ReassignedStop[];
+  unassignable: ReassignedStop[];
+  summary: {
+    pending_taken: number;
+    distributed_to_drivers: number;
+    total_delta_km: number;
+    confidence: number;
+  };
+}
+
 type DispatchMode = "ai" | "list";
 
 export function EmergencyBoard() {
@@ -68,8 +95,12 @@ export function EmergencyBoard() {
   const [pendingCandidates, setPendingCandidates] = useState<string | null>(null);
   const [pendingApply, setPendingApply] = useState<string | null>(null);
 
-  // AI 一鍵派遣（呼叫 /api/manager/emergency/plan + /apply）
+  // AI 一鍵派遣 — 拿 plan 後不直接 apply，先讓主管預覽 / 調整
   const [aiBatchPending, setAiBatchPending] = useState(false);
+  const [aiPreview, setAiPreview] = useState<ReroutePlan | null>(null);
+  /** task_stop_id → driver_id 的手動覆寫（取代 AI 建議） */
+  const [previewOverrides, setPreviewOverrides] = useState<Record<string, string>>({});
+  const [applyingPreview, setApplyingPreview] = useState(false);
 
   const load = () => {
     setError(null);
@@ -114,54 +145,86 @@ export function EmergencyBoard() {
   const closeReassign = () => {
     setActiveDriver(null);
     setPendingStops(null);
+    setAiPreview(null);
+    setPreviewOverrides({});
   };
 
   /**
-   * AI 一鍵派遣 — 把該 driver 全部 pending stops 直接套用 AI 排程方案：
-   *  1. POST /api/manager/emergency/plan → 得到全 stops 的最佳目標 driver
-   *  2. POST /api/manager/emergency/apply → 一次寫回 delivery_task_stops
-   *  3. 重抓 pending stops + driver snapshot
-   * 套用後使用者仍可繼續用 「選擇物流士 / AI 派遣建議」對個別站做調整（移到下一個 driver 的 dialog）。
+   * AI 一鍵派遣（步驟 1）— 呼叫 /plan 拿到方案，但**不直接 apply**，
+   * 改成把 plan 攤在 dialog 內變成「確認面板」讓主管逐站調整 to_driver_id。
    */
   const aiBatchDispatch = async () => {
     if (!activeDriver) return;
-    if (!confirm(
-      `用 AI 一鍵派遣這 ${activeDriver.pending_stops} 個 pending stops 嗎？\n` +
-      `AI 會幫每個 stop 挑最佳的接手 driver；套用後你仍可逐站手動調整。`
-    )) return;
-
     setError(null);
     setAiBatchPending(true);
     try {
-      // 1) 拿到 AI 規劃方案
-      const planRes = await fetch("/api/manager/emergency/plan", {
+      const res = await fetch("/api/manager/emergency/plan", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ down_driver_id: activeDriver.driver_id, date })
       });
-      const planJ = await planRes.json();
-      if (!planJ.ok) {
-        setError(planJ.error?.message ?? "AI 規劃失敗");
+      const j = await res.json();
+      if (!j.ok) {
+        setError(j.error?.message ?? "AI 規劃失敗");
         return;
       }
-      // 2) 直接套用
-      const applyRes = await fetch("/api/manager/emergency/apply", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ plan: planJ.data })
-      });
-      const applyJ = await applyRes.json();
-      if (!applyJ.ok) {
-        setError(applyJ.error?.message ?? "套用失敗");
-        return;
-      }
-      // 3) 重抓資料
-      openReassign(activeDriver);
-      load();
+      setAiPreview(j.data as ReroutePlan);
+      setPreviewOverrides({});
     } catch (e) {
       setError(e instanceof Error ? e.message : "未知錯誤");
     } finally {
       setAiBatchPending(false);
+    }
+  };
+
+  /** 取消預覽（不做任何寫入） */
+  const cancelAiPreview = () => {
+    setAiPreview(null);
+    setPreviewOverrides({});
+  };
+
+  /** 套用 preview — 用 overrides 蓋過 AI 預設後，POST /apply */
+  const applyAiPreview = async () => {
+    if (!aiPreview || !activeDriver) return;
+    setError(null);
+    setApplyingPreview(true);
+    try {
+      // 把 overrides 套進 plan
+      const candidatePool = drivers.filter((d) => d.driver_id !== activeDriver.driver_id);
+      const driverNameById = new Map(candidatePool.map((d) => [d.driver_id, d.driver_name]));
+      const merged: ReroutePlan = {
+        ...aiPreview,
+        reassigned: aiPreview.reassigned.map((r) => {
+          const ov = previewOverrides[r.task_stop_id];
+          if (!ov) return r;
+          return {
+            ...r,
+            to_driver_id: ov,
+            to_driver_name: driverNameById.get(ov) ?? r.to_driver_name,
+            reason: r.reason + "（主管調整）"
+          };
+        })
+      };
+      const res = await fetch("/api/manager/emergency/apply", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ plan: merged })
+      });
+      const j = await res.json();
+      if (!j.ok) {
+        setError(j.error?.message ?? "套用失敗");
+        return;
+      }
+      setAiPreview(null);
+      setPreviewOverrides({});
+      // 重抓 driver snapshot + pending stops
+      const a = activeDriver;
+      load();
+      openReassign(a);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "未知錯誤");
+    } finally {
+      setApplyingPreview(false);
     }
   };
 
@@ -372,19 +435,32 @@ export function EmergencyBoard() {
                   <Loader2 className="mx-auto mb-2 size-5 animate-spin" />
                   載入中…
                 </div>
+              ) : aiPreview ? (
+                /* === AI 一鍵派遣後的確認面板 === */
+                <AiDispatchPreview
+                  plan={aiPreview}
+                  overrides={previewOverrides}
+                  onOverride={(taskStopId, driverId) =>
+                    setPreviewOverrides((m) => ({ ...m, [taskStopId]: driverId }))
+                  }
+                  candidates={drivers.filter((d) => d.driver_id !== activeDriver.driver_id)}
+                  onCancel={cancelAiPreview}
+                  onApply={applyAiPreview}
+                  pending={applyingPreview}
+                />
               ) : !pendingStops || pendingStops.length === 0 ? (
                 <div className="py-8 text-center text-sm text-slate-500">
                   此物流士目前已無 pending stops。
                 </div>
               ) : (
                 <>
-                  {/* AI 一鍵派遣 — 套用後仍可對每個站手動調整 */}
+                  {/* AI 一鍵派遣 — 套用前會先進入可調整的 preview 面板 */}
                   <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-brand-200 bg-brand-50/60 px-3 py-2 text-sm">
                     <div className="flex items-center gap-2 min-w-0">
                       <Wand2 className="size-4 shrink-0 text-brand-500" />
                       <span className="text-slate-700">
-                        AI 會用 cheapest-insertion 把 {pendingStops.length} 個 stop 自動分到其他物流士；
-                        套用後仍可逐站調整。
+                        AI 會用 cheapest-insertion 把 {pendingStops.length} 個 stop 排到其他物流士；
+                        按下後會出現可調整的預覽面板。
                       </span>
                     </div>
                     <Button
@@ -470,3 +546,121 @@ export function EmergencyBoard() {
   );
 }
 
+/* ────────────────────────────────────────────────────────────
+ * AiDispatchPreview — AI 一鍵派遣後的可調整確認面板
+ *  - 每一個 stop 列出：站名 + AI 預設目標 driver + 下拉可換 driver
+ *  - 主管調整後按「套用全部」一次寫入
+ *  - 同時顯示 AI 分析（繞路 Δ km、信心度）
+ * ──────────────────────────────────────────────────────────── */
+function AiDispatchPreview({
+  plan, overrides, onOverride, candidates, onCancel, onApply, pending
+}: {
+  plan: ReroutePlan;
+  overrides: Record<string, string>;
+  onOverride: (taskStopId: string, driverId: string) => void;
+  candidates: DriverSnapshot[];
+  onCancel: () => void;
+  onApply: () => void;
+  pending: boolean;
+}) {
+  const totalChanges = Object.keys(overrides).length;
+  return (
+    <div>
+      {/* AI plan summary */}
+      <div className="mb-3 grid grid-cols-2 gap-2 rounded-md border border-brand-200 bg-brand-50/60 p-3 text-xs md:grid-cols-4">
+        <SummaryStat label="搬遷站數" value={`${plan.summary.pending_taken}`} />
+        <SummaryStat label="分散給" value={`${plan.summary.distributed_to_drivers} 位`} />
+        <SummaryStat label="總繞路" value={`+${plan.summary.total_delta_km.toFixed(1)} km`} />
+        <SummaryStat label="信心分數" value={`${(plan.summary.confidence * 100).toFixed(0)}%`} />
+      </div>
+
+      {plan.reassigned.length === 0 ? (
+        <div className="py-8 text-center text-sm text-slate-500">
+          AI 沒有可重派的 stop（可能都是 unassignable 或目前沒 pending）。
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {plan.reassigned.map((r) => {
+            const effective = overrides[r.task_stop_id] ?? r.to_driver_id ?? "";
+            const overridden = overrides[r.task_stop_id] && overrides[r.task_stop_id] !== r.to_driver_id;
+            return (
+              <li
+                key={r.task_stop_id}
+                className={
+                  "rounded-md border p-3 " +
+                  (overridden
+                    ? "border-amber-300 bg-amber-50/40"
+                    : "border-slate-200 bg-slate-50/40")
+                }
+              >
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-slate-900">{r.stop_name}</div>
+                    <div className="mt-0.5 text-[11px] text-slate-500">
+                      AI 建議：<strong className="text-slate-700">{r.to_driver_name ?? "—"}</strong>
+                      {" · "}+{r.delta_km.toFixed(1)} km
+                      {r.reason ? <span className="ml-1">· {r.reason}</span> : null}
+                    </div>
+                  </div>
+                  <select
+                    value={effective}
+                    onChange={(e) => onOverride(r.task_stop_id, e.target.value)}
+                    className={
+                      "h-9 rounded-md border bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30 " +
+                      (overridden ? "border-amber-400" : "border-slate-300")
+                    }
+                  >
+                    {candidates.map((d) => (
+                      <option key={d.driver_id} value={d.driver_id}>
+                        {d.driver_name}
+                        {d.employee_code ? ` (${d.employee_code})` : ""}
+                        {" · pending "}{d.pending_stops}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {plan.unassignable.length > 0 && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="font-semibold">⚠️ 無人可接 ({plan.unassignable.length}):</div>
+          <ul className="mt-1 list-disc pl-5 space-y-0.5">
+            {plan.unassignable.map((r) => (
+              <li key={r.task_stop_id}>{r.stop_name} — {r.unassign_reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-3">
+        <span className="mr-auto text-xs text-slate-500">
+          {totalChanges > 0 ? `已手動覆寫 ${totalChanges} 站` : "未調整任何站"}
+        </span>
+        <Button variant="outline" size="sm" onClick={onCancel} disabled={pending}>
+          取消
+        </Button>
+        <Button
+          size="sm"
+          onClick={onApply}
+          loading={pending}
+          disabled={plan.reassigned.length === 0}
+        >
+          套用全部（{plan.reassigned.length}）
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function SummaryStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-white px-2 py-1.5">
+      <div className="text-[10px] text-slate-500">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">{value}</div>
+    </div>
+  );
+}

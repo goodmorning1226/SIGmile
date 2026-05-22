@@ -84,12 +84,12 @@ export function OnTimeBucketDonut({
 
         <div className="absolute inset-0 grid place-items-center text-center">
           <div>
-            <div className="text-xs text-slate-500">{centerLabel}</div>
+            <div className="text-xs text-slate-500">平均準時</div>
             <div className="mt-0.5 text-3xl font-semibold tabular-nums text-slate-900">
-              {total}
+              {(weightedAvg * 100).toFixed(0)}%
             </div>
             <div className="mt-0.5 text-[11px] text-slate-500">
-              平均準時 {(weightedAvg * 100).toFixed(0)}%
+              {total} {centerLabel}
             </div>
           </div>
         </div>

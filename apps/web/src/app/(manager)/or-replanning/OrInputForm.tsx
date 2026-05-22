@@ -37,6 +37,11 @@ export interface OrInputParams {
     overtime_threshold:  number;  // H（加班門檻）
   };
   num_trips: 1 | 2;
+  /**
+   * 這次試算要分給幾位物流士（OR 集合 P 大小）。
+   * null / 0 = 使用所有啟用中物流士；正整數 = 強制限制到 N 位。
+   */
+  num_drivers: number | null;
 }
 
 export const DEFAULT_OR_INPUT: OrInputParams = {
@@ -52,7 +57,8 @@ export const DEFAULT_OR_INPUT: OrInputParams = {
     max_work_minutes:   720,    // 12h
     overtime_threshold: 480     // 8h
   },
-  num_trips: 2
+  num_trips: 2,
+  num_drivers: null              // null = 用全部啟用中物流士
 };
 
 interface Props {
@@ -96,10 +102,10 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
         </Field>
       </FieldGroup>
 
-      {/* 2. 工時規則 H̄ / H */}
+      {/* 2. 工時規則 H̄ / H + 派遣人數 */}
       <FieldGroup
         title="2. 工時規則"
-        description="H̄ 是硬上限（OR 約束 F），H 是加班門檻（與 γ 一起算超時成本）"
+        description="H̄ 是硬上限（OR 約束 F），H 是加班門檻（與 γ 一起算超時成本）；派遣人數限制這次試算最多分給幾位物流士"
       >
         <Field label="H̄ — 工時上限" suffix="分鐘" hint="超過會 infeasible，OR 會 fallback 開新司機">
           <NumberInput
@@ -113,6 +119,18 @@ export function OrInputForm({ value, onChange, readOnly }: Props) {
             value={value.hours.overtime_threshold}
             onChange={(n) => setH({ overtime_threshold: n })}
             min={60} step={30} disabled={readOnly}
+          />
+        </Field>
+        <Field
+          label="派遣人數"
+          suffix="位"
+          hint="這次試算最多分給幾位啟用中物流士。0 = 全部"
+          className="sm:col-span-2"
+        >
+          <NumberInput
+            value={value.num_drivers ?? 0}
+            onChange={(n) => set("num_drivers", n > 0 ? n : null)}
+            min={0} max={20} step={1} disabled={readOnly}
           />
         </Field>
       </FieldGroup>
@@ -234,6 +252,12 @@ export function parseOrInputParams(raw: unknown): OrInputParams {
           ?? DEFAULT_OR_INPUT.hours.overtime_threshold
       )
     },
-    num_trips: trips
+    num_trips: trips,
+    num_drivers: (() => {
+      const v = r?.num_drivers;
+      if (v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+    })()
   };
 }

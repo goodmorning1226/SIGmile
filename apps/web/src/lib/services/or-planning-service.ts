@@ -371,8 +371,19 @@ export class MockORPlanningService implements IORPlanningService {
       .eq("is_active", true)
       .returns<(StopRow & { name: string })[]>();
 
-    const drivers = driversRaw ?? [];
+    const allDrivers = driversRaw ?? [];
     const stops   = stopsRaw ?? [];
+
+    // 「派遣人數」限制 — UI 上叫 num_drivers，null/0 = 全部
+    const numDriversRequested: number | null = (() => {
+      const v = params?.num_drivers;
+      if (v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+    })();
+    const drivers = numDriversRequested != null && numDriversRequested < allDrivers.length
+      ? allDrivers.slice(0, numDriversRequested)  // 取前 N 位（已依 employee_code 排序）
+      : allDrivers;
 
     // 啟動診斷資訊（fallback 時也帶回去）
     const diagnostics: Record<string, unknown> = {
@@ -381,6 +392,8 @@ export class MockORPlanningService implements IORPlanningService {
       cwd: process.cwd(),
       stops_count: stops.length,
       drivers_count: drivers.length,
+      drivers_available: allDrivers.length,
+      drivers_limit_requested: numDriversRequested,
       tomtom_key_set: Boolean(process.env.TOMTOM_API_KEY)
     };
 
