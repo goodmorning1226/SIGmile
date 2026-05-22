@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Truck, Send, History, LogOut, Layers,
-  Zap, LifeBuoy
+  Zap, LifeBuoy, CalendarDays
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -16,8 +16,9 @@ const NAV: readonly NavGroup[] = [
   {
     title: "營運",
     items: [
-      { href: "/dashboard", label: "今日總覽", icon: LayoutDashboard },
-      { href: "/drivers",   label: "物流士",   icon: Truck }
+      { href: "/dashboard",           label: "今日總覽", icon: LayoutDashboard },
+      { href: "/quarterly-analysis",  label: "季度分析", icon: CalendarDays },
+      { href: "/drivers",             label: "物流士",   icon: Truck }
     ]
   },
   {

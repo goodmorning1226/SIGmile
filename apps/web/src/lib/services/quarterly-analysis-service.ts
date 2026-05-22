@@ -48,12 +48,24 @@ export interface ProblemStore {
   late_count: number;
 }
 
+/** 站點狀態總分佈 — 用於季度版 StopStatusDonut */
+export interface QuarterlyStatusBreakdown {
+  pending: number;
+  navigating: number;
+  arrived: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+}
+
 export interface QuarterlyAnalysis {
   current: QuarterlyKpi;
   previous: QuarterlyKpi | null;  // 上一季比較
   monthly_trend: MonthlyPoint[];
   top_drivers: DriverRank[];
   problem_stores: ProblemStore[];
+  /** 季內所有站點的最終狀態分佈（給 donut 用） */
+  status_breakdown: QuarterlyStatusBreakdown;
 }
 
 /** 把 "2026Q1" 變 ["2026-01-01", "2026-03-31"] */
@@ -306,20 +318,51 @@ async function problemStores(quarter: string, limit = 8): Promise<ProblemStore[]
     .slice(0, limit);
 }
 
+async function statusBreakdown(quarter: string): Promise<QuarterlyStatusBreakdown> {
+  const admin = createSupabaseAdminClient();
+  const { start, end } = quarterRange(quarter);
+
+  const { data: tasks } = await admin
+    .from("delivery_tasks")
+    .select("id")
+    .gte("delivery_date", start)
+    .lte("delivery_date", end)
+    .returns<{ id: string }[]>();
+  const out: QuarterlyStatusBreakdown = {
+    pending: 0, navigating: 0, arrived: 0,
+    completed: 0, failed: 0, skipped: 0
+  };
+  if (!tasks || tasks.length === 0) return out;
+
+  const { data: stops } = await admin
+    .from("delivery_task_stops")
+    .select("status")
+    .in("delivery_task_id", tasks.map((t) => t.id))
+    .returns<{ status: string }[]>();
+  for (const s of stops ?? []) {
+    if (s.status in out) {
+      (out as unknown as Record<string, number>)[s.status] += 1;
+    }
+  }
+  return out;
+}
+
 export async function getQuarterlyAnalysis(quarter: string): Promise<QuarterlyAnalysis> {
-  const [current, previous, trend, drivers, stores] = await Promise.all([
+  const [current, previous, trend, drivers, stores, breakdown] = await Promise.all([
     aggregateQuarter(quarter),
     aggregateQuarter(prevQuarter(quarter)).catch(() => null),
     monthlyTrend(quarter),
     topDrivers(quarter),
-    problemStores(quarter)
+    problemStores(quarter),
+    statusBreakdown(quarter)
   ]);
   return {
     current,
     previous,
     monthly_trend: trend,
     top_drivers: drivers,
-    problem_stores: stores
+    problem_stores: stores,
+    status_breakdown: breakdown
   };
 }
 

@@ -1,6 +1,6 @@
 import {
   AlertTriangle, CheckCircle2, Clock, MapPin,
-  PieChart, TrendingUp, Truck, UploadCloud, CalendarDays
+  PieChart, TrendingUp, Truck, UploadCloud
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { KpiCard, type KpiCardProps } from "@/components/kpi/KpiCard";
@@ -8,21 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { CumulativeRateChart } from "@/components/charts/CumulativeRateChart";
 import { StopStatusDonut } from "@/components/charts/StopStatusDonut";
 import { getDashboardBundle } from "@/lib/services/dashboard-service";
-import {
-  getQuarterlyAnalysis, defaultQuarter
-} from "@/lib/services/quarterly-analysis-service";
 import { AiAnalysisButton } from "./AiAnalysisButton";
 import { DashboardInsights } from "./DashboardInsights";
-import { QuarterlySection } from "./QuarterlySection";
-import { QuarterSelector } from "../quarterly-analysis/QuarterSelector";
 
 export const dynamic = "force-dynamic";
 
 type Tone = NonNullable<KpiCardProps["tone"]>;
-
-interface PageProps {
-  searchParams: Promise<{ q?: string }>;
-}
 
 function toneByRate(value: number, good: number, warn: number): Tone {
   if (value >= good) return "good";
@@ -35,15 +26,8 @@ function toneByCount(count: number, warnAtOrAbove: number, badAtOrAbove: number)
   return "good";
 }
 
-export default async function DashboardPage({ searchParams }: PageProps) {
-  const sp = await searchParams;
-  const quarter = sp.q && /^\d{4}Q[1-4]$/.test(sp.q) ? sp.q : defaultQuarter();
-
-  // Dashboard 今日 + 本季 同時撈
-  const [{ kpi, charts }, quarterly] = await Promise.all([
-    getDashboardBundle(),
-    getQuarterlyAnalysis(quarter)
-  ]);
+export default async function DashboardPage() {
+  const { kpi, charts } = await getDashboardBundle();
 
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
   const completionTone = toneByRate(kpi.completion_rate, 0.8, 0.5);
@@ -114,7 +98,6 @@ export default async function DashboardPage({ searchParams }: PageProps) {
 
       {/* === 圖表分析 === */}
       <section className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* 時段累積完成率（占 2 格） */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -133,7 +116,6 @@ export default async function DashboardPage({ searchParams }: PageProps) {
           </CardContent>
         </Card>
 
-        {/* 站點狀態分佈 donut */}
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -170,19 +152,6 @@ export default async function DashboardPage({ searchParams }: PageProps) {
             </div>
           </CardContent>
         </Card>
-      </section>
-
-      {/* === 本季分析（嵌入式，取代獨立 /quarterly-analysis 頁） === */}
-      <section className="mt-8">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CalendarDays className="size-4 text-brand-500" />
-            <h2 className="text-lg font-semibold text-slate-900">本季分析</h2>
-            <span className="text-xs text-slate-500">跨季 KPI、月度趨勢、門市異常熱點</span>
-          </div>
-          <QuarterSelector current={quarter} />
-        </div>
-        <QuarterlySection data={quarterly} quarter={quarter} />
       </section>
     </>
   );

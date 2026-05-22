@@ -19,10 +19,10 @@ function recentQuarters(now: Date = new Date(), n = 6): string[] {
 
 export function QuarterSelector({
   current,
-  basePath = "/dashboard"
+  basePath = "/quarterly-analysis"
 }: {
   current: string;
-  /** 跳轉的 base path（預設 /dashboard 因為季度分析已嵌入 dashboard） */
+  /** 跳轉的 base path（預設 /quarterly-analysis） */
   basePath?: string;
 }) {
   const router = useRouter();
@@ -38,7 +38,7 @@ export function QuarterSelector({
         onChange={(e) => {
           const v = e.target.value;
           startTransition(() => {
-            router.push(`${basePath}?q=${v}#quarterly`, { scroll: false });
+            router.push(`${basePath}?q=${v}`, { scroll: false });
           });
         }}
         className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30"

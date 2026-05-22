@@ -1,6 +1,7 @@
-import { CalendarDays, TrendingUp, AlertTriangle, Store, Flame } from "lucide-react";
+import { CalendarDays, TrendingUp, AlertTriangle, Store, Flame, PieChart } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { StopStatusDonut } from "@/components/charts/StopStatusDonut";
 import type { QuarterlyAnalysis, QuarterlyKpi } from "@/lib/services/quarterly-analysis-service";
 
 /**
@@ -14,7 +15,7 @@ import type { QuarterlyAnalysis, QuarterlyKpi } from "@/lib/services/quarterly-a
 export function QuarterlySection({
   data, quarter
 }: { data: QuarterlyAnalysis; quarter: string }) {
-  const { current, previous, monthly_trend, problem_stores } = data;
+  const { current, previous, monthly_trend, problem_stores, status_breakdown } = data;
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
   const delta = (cur: number, prev?: number | null) =>
     prev == null || prev === 0
@@ -85,6 +86,22 @@ export function QuarterlySection({
           </CardContent>
         </Card>
       </section>
+
+      {/* 站點狀態分佈（季）— 從今日總覽搬過來的視覺化 */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <PieChart className="size-4 text-brand-500" />
+            <CardTitle>站點狀態分佈（本季）</CardTitle>
+          </div>
+          <CardDescription>
+            本季所有站點的最終狀態加總
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <StopStatusDonut data={status_breakdown} />
+        </CardContent>
+      </Card>
 
       {/* 門市異常熱點 — 季為期 */}
       <Card>
