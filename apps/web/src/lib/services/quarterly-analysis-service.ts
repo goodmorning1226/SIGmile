@@ -135,20 +135,59 @@ async function aggregateQuarter(quarter: string): Promise<QuarterlyKpi> {
     (s) => s.exception_reason || s.status === "failed"
   ).length;
 
+  // 🔁 fallback：本季完全沒 delivery 紀錄 → 用「目前 published plan」的 route_stops
+  //    把 total_stops / unique_drivers 補上去，讓季度頁不會全 0
+  let plannedStops = stopList.length;
+  let plannedDriverIds = new Set(taskList.map((t) => t.driver_id));
+  let plannedStopIds = new Set(stopList.map((s) => s.stop_id));
+
+  if (stopList.length === 0) {
+    const { data: plan } = await admin
+      .from("route_plans")
+      .select("id, published_at")
+      .eq("status", "published")
+      .gte("published_at", `${start}T00:00:00Z`)
+      .lte("published_at", `${end}T23:59:59Z`)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle<{ id: string }>();
+    if (plan) {
+      const { data: assigns } = await admin
+        .from("driver_route_assignments")
+        .select("id, driver_id")
+        .eq("route_plan_id", plan.id);
+      const aIds = (assigns ?? []).map((a) => (a as { id: string }).id);
+      const driverIds = (assigns ?? [])
+        .map((a) => (a as { driver_id: string | null }).driver_id)
+        .filter((x): x is string => !!x);
+      plannedDriverIds = new Set(driverIds);
+      if (aIds.length > 0) {
+        const { data: rs } = await admin
+          .from("route_stops")
+          .select("stop_id")
+          .in("driver_route_assignment_id", aIds);
+        plannedStopIds = new Set(
+          ((rs ?? []) as Array<{ stop_id: string }>).map((r) => r.stop_id)
+        );
+        plannedStops = (rs ?? []).length;
+      }
+    }
+  }
+
   return {
     quarter,
     start_date: start,
     end_date: end,
     total_tasks: taskList.length,
     completed_tasks: completedTasks,
-    total_stops: stopList.length,
+    total_stops: plannedStops,
     completed_stops: completedStops,
     on_time_stops: onTime,
     exception_stops: exceptions,
-    completion_rate: stopList.length === 0 ? 0 : completedStops / stopList.length,
+    completion_rate: plannedStops === 0 ? 0 : completedStops / plannedStops,
     on_time_rate: completedStops === 0 ? 0 : onTime / completedStops,
-    unique_drivers: new Set(taskList.map((t) => t.driver_id)).size,
-    unique_stores: new Set(stopList.map((s) => s.stop_id)).size
+    unique_drivers: plannedDriverIds.size,
+    unique_stores: plannedStopIds.size
   };
 }
 
@@ -281,13 +320,16 @@ async function problemStores(quarter: string, limit = 8): Promise<ProblemStore[]
     status: string;
     on_time: boolean | null;
     exception_reason: string | null;
-    stop: { name: string; city: string | null; district: string | null }
-          | { name: string; city: string | null; district: string | null }[]
+    stop: { name: string; city: string | null; district: string | null; is_active: boolean }
+          | { name: string; city: string | null; district: string | null; is_active: boolean }[]
           | null;
   }
   const { data: stops } = await admin
     .from("delivery_task_stops")
-    .select("stop_id, status, on_time, exception_reason, stop:stops(name, city, district)")
+    .select(
+      "stop_id, status, on_time, exception_reason, " +
+        "stop:stops(name, city, district, is_active)"
+    )
     .in("delivery_task_id", tasks.map((t) => t.id))
     .returns<ProblemStopRow[]>();
   const stopList = stops ?? [];
@@ -297,8 +339,10 @@ async function problemStores(quarter: string, limit = 8): Promise<ProblemStore[]
     const isException = !!s.exception_reason || s.status === "failed";
     const isLate = s.on_time === false;
     if (!isException && !isLate) continue;
+    const m = Array.isArray(s.stop) ? s.stop[0] : s.stop;
+    // 只計入仍 active 的 stop — 老舊封存的 stop 不算「本季異常熱點」
+    if (m && m.is_active === false) continue;
     if (!byStop.has(s.stop_id)) {
-      const m = Array.isArray(s.stop) ? s.stop[0] : s.stop;
       byStop.set(s.stop_id, {
         stop_id: s.stop_id,
         stop_name: m?.name ?? "(未知)",
@@ -332,16 +376,45 @@ async function statusBreakdown(quarter: string): Promise<QuarterlyStatusBreakdow
     pending: 0, navigating: 0, arrived: 0,
     completed: 0, failed: 0, skipped: 0
   };
-  if (!tasks || tasks.length === 0) return out;
 
-  const { data: stops } = await admin
-    .from("delivery_task_stops")
-    .select("status")
-    .in("delivery_task_id", tasks.map((t) => t.id))
-    .returns<{ status: string }[]>();
-  for (const s of stops ?? []) {
-    if (s.status in out) {
-      (out as unknown as Record<string, number>)[s.status] += 1;
+  if (tasks && tasks.length > 0) {
+    const { data: stops } = await admin
+      .from("delivery_task_stops")
+      .select("status")
+      .in("delivery_task_id", tasks.map((t) => t.id))
+      .returns<{ status: string }[]>();
+    for (const s of stops ?? []) {
+      if (s.status in out) {
+        (out as unknown as Record<string, number>)[s.status] += 1;
+      }
+    }
+  }
+
+  // 全 0 → fallback：用本季「最新 published plan」的 route_stops 當 pending
+  const totalSoFar = Object.values(out).reduce((s, v) => s + v, 0);
+  if (totalSoFar === 0) {
+    const { data: plan } = await admin
+      .from("route_plans")
+      .select("id")
+      .eq("status", "published")
+      .gte("published_at", `${start}T00:00:00Z`)
+      .lte("published_at", `${end}T23:59:59Z`)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle<{ id: string }>();
+    if (plan) {
+      const { data: assigns } = await admin
+        .from("driver_route_assignments")
+        .select("id")
+        .eq("route_plan_id", plan.id);
+      const aIds = ((assigns ?? []) as Array<{ id: string }>).map((a) => a.id);
+      if (aIds.length > 0) {
+        const { count } = await admin
+          .from("route_stops")
+          .select("id", { count: "exact", head: true })
+          .in("driver_route_assignment_id", aIds);
+        out.pending = count ?? 0;
+      }
     }
   }
   return out;

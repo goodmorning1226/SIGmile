@@ -90,7 +90,7 @@ export default async function PublishRoutePage() {
                 <CardTitle>步驟 1 · 停靠點資料</CardTitle>
               </div>
               <CardDescription>
-                試算所需的所有停靠點資料。請確認資料為最新狀態。
+                目前共 <strong className="text-slate-900">{stopCount ?? 0}</strong> 個啟用中停靠點 — OR 試算會自動納入全部。請確認資料為最新狀態。
               </CardDescription>
             </CardHeader>
             <CardContent>

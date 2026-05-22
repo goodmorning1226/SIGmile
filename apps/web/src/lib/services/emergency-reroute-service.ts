@@ -191,7 +191,7 @@ export async function getTodaySnapshot(opts: { date?: string } = {}): Promise<{
       driver_name: d?.full_name ?? "(未知)",
       employee_code: d?.employee_code ?? null,
       shift: d?.shift ?? null,
-      vehicle_capacity: d?.vehicle_capacity ?? 60,
+      vehicle_capacity: d?.vehicle_capacity ?? 250,  // 對齊 OR_new MVP seed
       temperature_capability: (d?.temperature_capability ?? "ambient,mixed,chilled,frozen")
         .split(",").map((x) => x.trim()).filter(Boolean),
       task_id: t.id,
@@ -763,7 +763,7 @@ export async function suggestDriversForStop(opts: {
       const sm = pickFirst(x.stop);
       return s + (sm?.avg_delivery_volume ?? 0);
     }, 0);
-    const totalCap = d.vehicle_capacity ?? 60;
+    const totalCap = d.vehicle_capacity ?? 250;  // 對齊 OR_new MVP seed
     const remaining = Math.max(0, totalCap - usedBoxes);
 
     const shiftOk = !stopRow.preferred_shift || !d.shift || d.shift === stopRow.preferred_shift;

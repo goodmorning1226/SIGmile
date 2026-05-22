@@ -2,8 +2,9 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Download, Upload, Check, X, Copy } from "lucide-react";
+import { Download, Upload, Check, X, Copy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 interface ImportResult {
   total_rows: number;
@@ -17,8 +18,11 @@ interface ImportResult {
 /**
  * 物流士主檔 Excel I/O：下載目前所有 driver、上傳 xlsx 批次新增/更新。
  * 新建司機的初始密碼會列在結果區，主管可一次複製。
+ *
+ * 卡片版型：CardHeader 左側標題 + 右側 Download/Upload 按鈕，
+ * 匯入結果 / 錯誤訊息才會撐開 CardContent。
  */
-export function DriversExcelPanel() {
+export function DriversExcelPanel({ driverCount }: { driverCount: number }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [pending, startTransition] = useTransition();
@@ -67,25 +71,41 @@ export function DriversExcelPanel() {
     }
   };
 
+  const hasFeedback = !!result || !!error;
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={downloadExcel}>
-          <Download className="size-3.5" />
-          下載 Excel
-        </Button>
-        <Button size="sm" onClick={onPickFile} loading={pending}>
-          <Upload className="size-3.5" />
-          上傳 Excel
-        </Button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          className="hidden"
-          onChange={onFileChange}
-        />
-      </div>
+    <Card className="mb-6">
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Users className="size-4 text-brand-500" />
+            <CardTitle>物流士主檔</CardTitle>
+          </div>
+          <CardDescription>
+            目前共 <strong className="text-slate-900">{driverCount}</strong> 位啟用中的物流士。
+          </CardDescription>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={downloadExcel}>
+            <Download className="size-3.5" />
+            下載 Excel
+          </Button>
+          <Button size="sm" onClick={onPickFile} loading={pending}>
+            <Upload className="size-3.5" />
+            上傳 Excel
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={onFileChange}
+          />
+        </div>
+      </CardHeader>
+
+      {hasFeedback && (
+        <CardContent className="space-y-3">
 
       {result && (
         <div className="rounded-md border border-accent-200 bg-accent-50 p-3 text-sm">
@@ -153,6 +173,8 @@ export function DriversExcelPanel() {
         </div>
       )}
 
-    </div>
+        </CardContent>
+      )}
+    </Card>
   );
 }

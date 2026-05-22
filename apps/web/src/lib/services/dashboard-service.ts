@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { DashboardKpi } from "@/types/domain";
 
 /**
@@ -93,20 +94,11 @@ export async function getDashboardBundle(date?: string): Promise<DashboardBundle
     .returns<TaskRow[]>();
   const taskList = tasks ?? [];
 
+  // ★ 沒今日 task → 退回看「目前 published 路線方案」的展開資料
+  //   (使用者剛發布、還沒展開成 today's delivery_tasks，或還沒到當天)
+  //   這樣總覽至少能顯示「方案規劃的 N 站，完成 0/N」而不是全空。
   if (taskList.length === 0) {
-    return {
-      kpi: {
-        completion_rate: 0, store_arrival_rate: 0, on_time_rate: 0,
-        uploaded_store_count: 0, arrived_store_count: 0, on_time_store_count: 0,
-        total_stop_count: 0, in_progress_driver_count: 0, exception_count: 0,
-        snapshot_date: target
-      },
-      charts: {
-        hourly: emptyHourly(), drivers: [],
-        status: { pending: 0, navigating: 0, arrived: 0, completed: 0, failed: 0, skipped: 0 },
-        date: target
-      }
-    };
+    return getPublishedPlanBundle(target);
   }
 
   // 2. stops（一次抓全部欄位，給 KPI 和 charts 共用）
@@ -207,4 +199,104 @@ function emptyHourly(): HourlyPoint[] {
     out.push({ hour: h, completed: 0, cumulative: 0 });
   }
   return out;
+}
+
+/**
+ * Fallback：當「目標日期沒任何 delivery_tasks」時，從「目前 published 路線方案」
+ * 反推應該要送的站數 / 司機數，當作「今日預定」顯示出來。
+ *
+ * 這樣 dashboard / 季度分析等視覺化在主管按下「採用並發布」之前就會立刻有資料，
+ * 不會看起來像空頁面 → 也讓全站數字以「發布路線」為主來源對齊。
+ */
+async function getPublishedPlanBundle(target: string): Promise<DashboardBundle> {
+  const admin = createSupabaseAdminClient();
+  const empty: DashboardBundle = {
+    kpi: {
+      completion_rate: 0, store_arrival_rate: 0, on_time_rate: 0,
+      uploaded_store_count: 0, arrived_store_count: 0, on_time_store_count: 0,
+      total_stop_count: 0, in_progress_driver_count: 0, exception_count: 0,
+      snapshot_date: target
+    },
+    charts: {
+      hourly: emptyHourly(), drivers: [],
+      status: { pending: 0, navigating: 0, arrived: 0, completed: 0, failed: 0, skipped: 0 },
+      date: target
+    }
+  };
+
+  // 最新的 published plan（最近發布的那一份）
+  const { data: plan } = await admin
+    .from("route_plans")
+    .select("id")
+    .eq("status", "published")
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle<{ id: string }>();
+  if (!plan) return empty;
+
+  // 撈所有 driver_route_assignments → route_stops 數
+  interface AssignmentRow {
+    id: string;
+    driver_id: string | null;
+    route_name: string;
+    driver: { full_name: string; employee_code: string | null }
+            | { full_name: string; employee_code: string | null }[] | null;
+  }
+  const { data: assignments } = await admin
+    .from("driver_route_assignments")
+    .select(
+      "id, driver_id, route_name, " +
+        "driver:profiles(full_name, employee_code)"
+    )
+    .eq("route_plan_id", plan.id)
+    .returns<AssignmentRow[]>();
+  const aList = assignments ?? [];
+  const assignmentIds = aList.map((a) => a.id);
+
+  let plannedStops = 0;
+  const perAssign = new Map<string, number>();
+  if (assignmentIds.length > 0) {
+    const { data: rs } = await admin
+      .from("route_stops")
+      .select("id, driver_route_assignment_id")
+      .in("driver_route_assignment_id", assignmentIds);
+    for (const r of (rs ?? []) as Array<{ id: string; driver_route_assignment_id: string }>) {
+      plannedStops++;
+      perAssign.set(r.driver_route_assignment_id, (perAssign.get(r.driver_route_assignment_id) ?? 0) + 1);
+    }
+  }
+
+  const drivers: DriverRanking[] = aList
+    .filter((a) => a.driver_id != null)
+    .map((a) => {
+      const d = pickFirst(a.driver);
+      const total = perAssign.get(a.id) ?? 0;
+      return {
+        driver_id: a.driver_id!,
+        driver_name: d?.full_name ?? a.route_name ?? "(未指派)",
+        employee_code: d?.employee_code ?? null,
+        completed: 0,
+        total,
+        task_status: "pending",
+        exceptions: 0
+      };
+    })
+    .sort((a, b) => b.total - a.total);
+
+  return {
+    kpi: {
+      ...empty.kpi,
+      total_stop_count: plannedStops,
+      in_progress_driver_count: 0
+    },
+    charts: {
+      hourly: emptyHourly(),
+      drivers,
+      status: {
+        pending: plannedStops, navigating: 0, arrived: 0,
+        completed: 0, failed: 0, skipped: 0
+      },
+      date: target
+    }
+  };
 }

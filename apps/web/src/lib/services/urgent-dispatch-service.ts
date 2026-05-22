@@ -294,7 +294,7 @@ export async function suggestUrgentDispatch(urgentId: string): Promise<{
       const sm = pickFirst(x.stop);
       return s + (sm?.avg_delivery_volume ?? 0);
     }, 0);
-    const totalCap = d.vehicle_capacity ?? 60;
+    const totalCap = d.vehicle_capacity ?? 250;  // 對齊 OR_new MVP seed
     const remaining = Math.max(0, totalCap - usedBoxes);
     const remainingRatio = remaining / Math.max(1, totalCap);
 

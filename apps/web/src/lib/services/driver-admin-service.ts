@@ -100,7 +100,7 @@ export async function createDriver(input: CreateDriverInput): Promise<CreateDriv
     max_work_minutes: input.max_work_minutes ?? null,
     vehicle_id: input.vehicle_id ?? null,
     vehicle_type: input.vehicle_type ?? null,
-    vehicle_capacity: input.vehicle_capacity ?? null,
+    vehicle_capacity: input.vehicle_capacity ?? 250,  // 對齊 OR_new MVP seed
     temperature_capability: input.temperature_capability ?? null,
     distribution_center_id: input.distribution_center_id ?? null,
     service_area_id: input.service_area_id ?? null

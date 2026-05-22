@@ -123,9 +123,9 @@ export class MockORPlanningService implements IORPlanningService {
     const drivers = driversRaw ?? [];
     const stops   = stopsRaw ?? [];
 
-    // 預設容量（input_parameters.defaults.vehicle_capacity_boxes 沒給就用 60）
+    // 預設容量（input_parameters.defaults.vehicle_capacity_boxes 沒給就用 250，對齊 OR_new MVP seed）
     const params = (job.input_parameters ?? {}) as Record<string, any>;
-    const defaultCapacity: number = params?.defaults?.vehicle_capacity_boxes ?? 60;
+    const defaultCapacity: number = params?.defaults?.vehicle_capacity_boxes ?? 250;
     const defaultVolume:   number = params?.defaults?.service_minutes_default ? 10 : 10;
 
     // ──────────────────────────────────────────────────────────
@@ -333,7 +333,8 @@ export class MockORPlanningService implements IORPlanningService {
       params?.hours?.overtime_threshold ?? 480
     );
     // Q / σ 不在這個 UI 設定，從 driver / stop master 抓；沒設就用這個 fallback
-    const fallbackCapacity     = 60;
+    // (250 = OR_new MVP seed 的 driver vehicle_capacity)
+    const fallbackCapacity     = 250;
     const fallbackServiceMin   = 10;
     const numTrips: number = params?.num_trips ?? 2;
     const timeLimitSec = Number(process.env.OR_ENGINE_TIMEOUT_SEC ?? "120");
@@ -443,6 +444,10 @@ export class MockORPlanningService implements IORPlanningService {
       arr.reduce((s, x) => s + (x.avg_delivery_volume ?? 1), 0);
     const sumCap = (arr: typeof drivers) =>
       arr.reduce((s, d) => s + (d.vehicle_capacity ?? fallbackCapacity), 0) * numTrips;
+    const minCap = (arr: typeof drivers) =>
+      arr.length === 0 ? 0 : Math.min(...arr.map((d) => d.vehicle_capacity ?? fallbackCapacity));
+    const maxCap = (arr: typeof drivers) =>
+      arr.length === 0 ? 0 : Math.max(...arr.map((d) => d.vehicle_capacity ?? fallbackCapacity));
 
     const totalDemand   = sumDemand(serviceableStops);
     const totalCapacity = sumCap(drivers);
@@ -458,21 +463,31 @@ export class MockORPlanningService implements IORPlanningService {
     diagnostics.night_demand   = nightDemand;
     diagnostics.night_capacity = nightCapacity;
     diagnostics.serviceable_stops = serviceableStops.length;
+    diagnostics.num_trips      = numTrips;
+    diagnostics.driver_capacity_min = minCap(drivers);
+    diagnostics.driver_capacity_max = maxCap(drivers);
+
+    // 容量太低 → 提示主管 DB seed 可能還是舊值（OR_new MVP 預期 250/driver）
+    const looksLikeStaleCapacity = maxCap(drivers) > 0 && maxCap(drivers) < 200;
+    const staleCapacityHint = looksLikeStaleCapacity
+      ? `（偵測到 driver 容量偏低：每位最高 ${maxCap(drivers)} 箱，預期應為 250。` +
+        `請執行 supabase/seed/patch_driver_capacity_to_250.sql 修正。）`
+      : ``;
 
     // 任一班別 demand > capacity 都 infeasible
     if (dayDemand > dayCapacity) {
       return this.runRealFallback(
         jobId,
-        `日班需求 ${dayDemand} > 日班容量 ${dayCapacity}（${dayDrivers.length} 位日班 driver × ${numTrips} 趟）。` +
-        `多開日班 driver 或把部分 stops 改為夜班。`,
+        `日班需求 ${dayDemand} > 日班容量 ${dayCapacity}（${dayDrivers.length} 位日班 driver × ${numTrips} 趟，每位最高 ${maxCap(dayDrivers)} 箱）。` +
+        `多開日班 driver、把 num_trips 改 2、或執行 patch SQL 把 driver 容量補到 250。${staleCapacityHint}`,
         diagnostics
       );
     }
     if (nightDemand > nightCapacity) {
       return this.runRealFallback(
         jobId,
-        `夜班需求 ${nightDemand} > 夜班容量 ${nightCapacity}（${nightDrivers.length} 位夜班 driver × ${numTrips} 趟）。` +
-        `多開夜班 driver 或把部分 stops 改為日班。`,
+        `夜班需求 ${nightDemand} > 夜班容量 ${nightCapacity}（${nightDrivers.length} 位夜班 driver × ${numTrips} 趟，每位最高 ${maxCap(nightDrivers)} 箱）。` +
+        `多開夜班 driver 或把部分 stops 改為日班。${staleCapacityHint}`,
         diagnostics
       );
     }
@@ -480,7 +495,7 @@ export class MockORPlanningService implements IORPlanningService {
       return this.runRealFallback(
         jobId,
         `總需求 ${totalDemand} 箱 > 總容量 ${totalCapacity} 箱（${drivers.length} 司機 × 容量 × ${numTrips} 趟）。` +
-        `請：(a) 增加司機 / 容量 / 趟次，或 (b) 暫時停用部分 stops，或 (c) 降低 stops 的 avg_delivery_volume。`,
+        `請：(a) 增加司機 / 容量 / 趟次，或 (b) 暫時停用部分 stops，或 (c) 降低 stops 的 avg_delivery_volume。${staleCapacityHint}`,
         diagnostics
       );
     }

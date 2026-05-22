@@ -38,7 +38,7 @@ export default async function DashboardPage() {
     <>
       <PageHeader
         title="今日總覽"
-        description={`${kpi.snapshot_date} · 即時掌握所有物流士的配送狀態與門市指標`}
+        description={`${kpi.snapshot_date} · 今日派送 ${kpi.total_stop_count} 站 · 即時配送狀態與門市指標`}
         actions={
           <AiAnalysisButton context={{
             completion_rate: kpi.completion_rate,

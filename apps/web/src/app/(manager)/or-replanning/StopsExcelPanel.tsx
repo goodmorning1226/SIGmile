@@ -121,11 +121,6 @@ export function StopsExcelPanel({ totalStops }: { totalStops: number }) {
           <p className="mt-1 text-xs text-slate-700">{error}</p>
         </div>
       )}
-
-      <p className="text-xs text-slate-500">
-        提示：先「下載 Excel」拿到最新欄位範本 → 在 Excel 編輯 → 「上傳 Excel」灌回。
-        欄位依「停靠點代碼」做 upsert（沒代碼的列以「名稱 + 地址」比對）。
-      </p>
     </div>
   );
 }

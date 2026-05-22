@@ -186,7 +186,9 @@ export default async function DriverDetailPage({ params }: PageProps) {
                 <div>
                   <CardTitle>位置與路線</CardTitle>
                   <CardDescription>
-                    DC + 所有停靠點 · TomTom 計算的真實道路路線
+                    {depot
+                      ? "DC + 所有停靠點 · TomTom 計算的真實道路路線"
+                      : "⚠️ 此物流士尚未指定物流中心（distribution_center_id），地圖不含 DC"}
                   </CardDescription>
                 </div>
                 <div className="text-right">
