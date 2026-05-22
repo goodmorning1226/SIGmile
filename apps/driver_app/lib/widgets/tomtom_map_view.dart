@@ -374,7 +374,8 @@ class _TomTomMapViewState extends State<TomTomMapView> {
             LatLng(_activeStop.lat!, _activeStop.lng!),
         // Navigation 級 zoom（street level）— 看得到路名 + 車道
         initialZoom: 17,
-        minZoom: 3,
+        // minZoom 放到 1 讓 driver 可以一直 zoom out（到整個世界級）
+        minZoom: 1,
         maxZoom: 19,
         // user 拖地圖時暫停 follow（避免 camera 跟手指搶）
         onPositionChanged: (camera, hasGesture) {

@@ -284,7 +284,7 @@ export async function suggestUrgentDispatch(urgentId: string): Promise<{
       if (ps?.lat && ps?.lng) lastPos = { lat: ps.lat, lng: ps.lng };
     }
     if (!lastPos) {
-      lastPos = { lat: 25.0610, lng: 121.4847 }; // depot fallback
+      lastPos = { lat: 24.9540, lng: 121.2270 }; // depot fallback（中壢自強一路）
     }
 
     const distKm = haversineMeters(lastPos, { lat: u.lat, lng: u.lng }) / 1000;

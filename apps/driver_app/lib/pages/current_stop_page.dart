@@ -59,7 +59,19 @@ class _CurrentStopPageState extends ConsumerState<CurrentStopPage> {
     final bundleAsync = ref.watch(todayBundleProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('目前站點')),
+      appBar: AppBar(
+        title: const Text('目前站點'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/today');
+            }
+          },
+        ),
+      ),
       body: bundleAsync.when(
         loading: () => const LoadingView(),
         error: (e, _) => ErrorView(
@@ -229,7 +241,7 @@ class _CurrentStopPageState extends ConsumerState<CurrentStopPage> {
                   }
                 },
           icon: const Icon(Icons.open_in_new),
-          label: const Text('用 Google Maps 開啟（含語音）'),
+          label: const Text('用 Google Maps 開啟'),
           style: OutlinedButton.styleFrom(
             foregroundColor: SigmileColors.brand,
             side: const BorderSide(color: SigmileColors.brand),
@@ -286,31 +298,6 @@ class _CurrentStopPageState extends ConsumerState<CurrentStopPage> {
           label: const Text('回報異常'),
         ),
 
-        const SizedBox(height: 16),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFF7ED),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFFED7AA)),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.info_outline,
-                  size: 16, color: SigmileColors.brandDark),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'App 內導航走 TomTom 地圖 + 路線；要 turn-by-turn 語音用「Google Maps 開啟」按鈕。',
-                  style: TextStyle(
-                    color: SigmileColors.brandDark,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
       ],
     );
   }

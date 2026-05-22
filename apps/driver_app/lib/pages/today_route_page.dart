@@ -433,42 +433,9 @@ class TodayRoutePage extends ConsumerWidget {
       label: const Text('查看停靠點清單'),
     ));
 
-    actions.add(const SizedBox(height: 8));
-    actions.add(_uploadMockLocationButton(context, ref, task?.id));
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: actions,
-    );
-  }
-
-  Widget _uploadMockLocationButton(
-      BuildContext context, WidgetRef ref, String? taskId) {
-    return TextButton.icon(
-      onPressed: () async {
-        try {
-          final svc = ref.read(driverLocationServiceProvider);
-          final p = svc.mockLatLng();
-          await svc.updateCurrentLocation(
-            lat: p.lat,
-            lng: p.lng,
-            deliveryTaskId: taskId,
-          );
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已上傳 mock 位置')),
-            );
-          }
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('上傳失敗：$e')),
-            );
-          }
-        }
-      },
-      icon: const Icon(Icons.my_location, size: 18),
-      label: const Text('上傳一筆 mock 位置'),
     );
   }
 

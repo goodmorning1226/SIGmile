@@ -375,7 +375,7 @@ export async function planReroute(opts: {
       const path: LatLng[] = [];
       if (lastDone) path.push({ lat: lastDone.lat, lng: lastDone.lng });
       else if (c.current_lat && c.current_lng) path.push({ lat: c.current_lat, lng: c.current_lng });
-      else path.push({ lat: 25.0610, lng: 121.4847 }); // depot
+      else path.push({ lat: 24.9540, lng: 121.2270 }); // depot fallback（中壢自強一路）
       for (const p of pending) path.push({ lat: p.lat, lng: p.lng });
 
       // 找最便宜插入位置
@@ -740,7 +740,7 @@ export async function suggestDriversForStop(opts: {
   const candidates: StopMoveCandidate[] = [];
   const W_DIST = 0.35, W_CAP = 0.15, W_SHIFT = 0.15, W_TEMP = 0.15,
         W_LOAD = 0.15, W_PRIO = 0.05;
-  const DEPOT = { lat: 25.0610, lng: 121.4847 };
+  const DEPOT = { lat: 24.9540, lng: 121.2270 };  // 中壢自強一路 fallback
 
   for (const d of drivers) {
     const taskId = taskByDriver.get(d.id);

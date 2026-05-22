@@ -1,0 +1,141 @@
+%% SIGmile 系統架構圖
+%% Last updated: 2026-05-22
+%% 渲染方式：
+%%   - VSCode：安裝 "Markdown Preview Mermaid Support" 擴充
+%%   - CLI：npx @mermaid-js/mermaid-cli -i docs/ARCHITECTURE.mmd -o docs/ARCHITECTURE.svg
+%%   - Web：直接貼到 https://mermaid.live/
+
+flowchart TB
+    %% ───────────────────── 使用者 ─────────────────────
+    subgraph USERS["👥 使用者端"]
+        direction LR
+        Manager["🧑‍💼 物流主管<br/>(瀏覽器)"]
+        Driver["🚚 物流士<br/>(Android / iOS)"]
+    end
+
+    %% ───────────────────── 前端 ─────────────────────
+    subgraph FRONTEND["📱 前端應用層"]
+        direction TB
+        subgraph WEB["apps/web<br/>Next.js 15 App Router (TypeScript)"]
+            direction TB
+            W_Dash["儀表板<br/>今日 / 季度總覽"]
+            W_Cluster["路線分配<br/>(Pointer DnD)"]
+            W_OR["OR 重新規劃<br/>(工時 / 容量 / 人數)"]
+            W_Emerg["緊急應變<br/>(AI 一鍵派遣 + Preview)"]
+            W_Quart["季度分析<br/>(準時率 Donut)"]
+            W_AI["AI 洞察<br/>(延誤路線/問題門市)"]
+        end
+
+        subgraph APP["apps/driver_app<br/>Flutter + Riverpod + go_router"]
+            direction TB
+            A_Today["今日路線"]
+            A_Stops["停靠點清單"]
+            A_Stop["目前站點"]
+            A_Nav["導航地圖<br/>(TomTom tiles + flutter_map)"]
+            A_Exc["回報異常"]
+        end
+    end
+
+    %% ───────────────────── 後端 ─────────────────────
+    subgraph BACKEND["⚙️ 後端服務層"]
+        direction TB
+
+        subgraph API["Next.js Route Handlers<br/>(apps/web/src/app/api/)"]
+            direction TB
+            API_Plan["/api/manager/plan/*<br/>規劃與發佈"]
+            API_Emerg["/api/manager/emergency/*<br/>緊急應變 plan/apply"]
+            API_Cluster["/api/manager/clusters/*<br/>分群與分配"]
+            API_Driver["/api/driver/*<br/>狀態回報 / 異常"]
+            API_OR["/api/manager/or-jobs/*<br/>OR 求解觸發"]
+        end
+
+        subgraph SERVICES["Domain Services<br/>(apps/web/src/lib/services/)"]
+            direction LR
+            S_OR["or-planning-service"]
+            S_Dash["dashboard-service"]
+            S_Quart["quarterly-analysis-service"]
+            S_AI["ai-insights-service"]
+            S_Driver["driver-task-service"]
+        end
+
+        subgraph ORENG["🐍 or-engine (Python)"]
+            direction TB
+            OR_API["FastAPI / CLI<br/>solver entrypoint"]
+            OR_Model["MTVRP Gurobi Model<br/>capacity=250, multi-trip, H/H̄"]
+        end
+    end
+
+    %% ───────────────────── 資料層 ─────────────────────
+    subgraph DATA["🗄️ 資料層"]
+        direction TB
+        subgraph SUPA["Supabase"]
+            DB[("PostgreSQL<br/>+ RLS")]
+            Auth["Auth<br/>(主管 / 物流士)"]
+            Storage["Storage<br/>(POD 照片)"]
+        end
+        Tables["核心資料表<br/>profiles · stops · driver_clusters<br/>route_plans · route_stops<br/>delivery_tasks · delivery_task_stops<br/>or_planning_jobs · urgent_shipments<br/>ai_analysis_requests"]
+    end
+
+    %% ───────────────────── 外部服務 ─────────────────────
+    subgraph EXT["🌐 外部 API"]
+        direction LR
+        TomTom["TomTom<br/>Tiles · Routes · Geocode · StaticMap"]
+        Gurobi["Gurobi<br/>License Server"]
+        Maps["Google Maps<br/>(備援 turn-by-turn)"]
+        AIAPI["🤖 AI LLM API<br/>(Anthropic / OpenAI)<br/><i>規劃中</i>"]
+    end
+
+    %% ───────────────────── 連線 ─────────────────────
+    Manager -- "HTTPS" --> WEB
+    Driver  -- "HTTPS / Realtime" --> APP
+
+    WEB --> API
+    APP -- "REST" --> API
+
+    API --> SERVICES
+    SERVICES --> DB
+    SERVICES --> Storage
+    Auth --> WEB
+    Auth --> APP
+
+    %% OR 流程
+    API_OR --> S_OR
+    S_OR -- "POST solve job" --> OR_API
+    OR_API --> OR_Model
+    OR_Model -- "license check" --> Gurobi
+    OR_API -- "result JSON" --> S_OR
+    S_OR -- "write route_plans / route_stops" --> DB
+
+    %% AI 流程
+    API_Emerg --> S_AI
+    S_AI --> DB
+    W_AI --> API_Emerg
+    W_Quart --> S_Quart
+    W_Dash --> S_Dash
+    S_AI -. "尚未串接（規劃中）<br/>洞察 / 一鍵派遣建議" .-> AIAPI
+
+    %% 地圖 / 導航
+    A_Nav -- "tiles + polyline" --> TomTom
+    A_Nav -. "外部備援" .-> Maps
+    WEB -- "Geocode / StaticMap" --> TomTom
+
+    DB -.-> Tables
+
+    %% ───────────────────── 樣式 ─────────────────────
+    classDef user      fill:#eef2ff,stroke:#6366f1,color:#1e1b4b;
+    classDef web       fill:#ecfeff,stroke:#0891b2,color:#083344;
+    classDef mobile    fill:#f0fdf4,stroke:#16a34a,color:#052e16;
+    classDef api       fill:#fff7ed,stroke:#ea580c,color:#431407;
+    classDef svc       fill:#fefce8,stroke:#ca8a04,color:#422006;
+    classDef or        fill:#faf5ff,stroke:#9333ea,color:#3b0764;
+    classDef data      fill:#f1f5f9,stroke:#475569,color:#0f172a;
+    classDef ext       fill:#fef2f2,stroke:#dc2626,color:#450a0a;
+
+    class Manager,Driver user;
+    class W_Dash,W_Cluster,W_OR,W_Emerg,W_Quart,W_AI,WEB web;
+    class A_Today,A_Stops,A_Stop,A_Nav,A_Exc,APP mobile;
+    class API_Plan,API_Emerg,API_Cluster,API_Driver,API_OR,API api;
+    class S_OR,S_Dash,S_Quart,S_AI,S_Driver,SERVICES svc;
+    class OR_API,OR_Model,ORENG or;
+    class DB,Auth,Storage,Tables,SUPA,DATA data;
+    class TomTom,Gurobi,Maps,AIAPI,EXT ext;

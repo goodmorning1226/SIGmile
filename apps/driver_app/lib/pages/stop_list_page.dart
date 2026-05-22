@@ -18,7 +18,21 @@ class StopListPage extends ConsumerWidget {
     final bundleAsync = ref.watch(todayBundleProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('停靠點清單')),
+      appBar: AppBar(
+        title: const Text('停靠點清單'),
+        // 顯式 leading：navigator 可以 pop 就 pop，不行就回主頁。
+        // 避免某些路徑（透過 context.go）後 stack 被 reset、AppBar 沒生 back 箭頭。
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/today');
+            }
+          },
+        ),
+      ),
       body: bundleAsync.when(
         loading: () => const LoadingView(message: '載入停靠點…'),
         error: (e, _) => ErrorView(

@@ -353,23 +353,35 @@ export async function buildInsight(input: AIInsightInput = {}): Promise<AIInsigh
     }));
 
   // ─── 7. 延誤 routes ───
+  //   一條路線進入「延誤」清單只當：
+  //     (a) 已完成 / skipped 但 on_time=false 且實際晚於 planned 超過 15 分；或
+  //     (b) 仍 pending/navigating，且現在已超過 planned > 15 分
+  //   maxDelay 取所有「真實延誤分鐘數」的最大值（不是 0 也不是估值）
   const now = Date.now();
   const delayed_routes: AIInsight["delayed_routes"] = [];
+  const DELAY_THRESHOLD = 15;
   for (const t of taskList) {
     const driver = pickFirst(t.driver);
     const assign = pickFirst(t.assignment);
     const ownStops = stopRows.filter((s) => s.delivery_task_id === t.id);
     let count = 0, maxDelay = 0;
     for (const s of ownStops) {
-      if (s.status === "completed" || s.status === "skipped") {
-        if (s.on_time === false) count++;
-        continue;
-      }
       if (!s.planned_arrival_at) continue;
       const planned = new Date(s.planned_arrival_at).getTime();
-      const ref = s.actual_arrival_at ? new Date(s.actual_arrival_at).getTime() : now;
-      const diff = Math.round((ref - planned) / 60_000);
-      if (diff > 15) {
+
+      let diff: number | null = null;
+      if (s.status === "completed" || s.status === "skipped") {
+        // 已完成 / 略過：用實際抵達時間算延誤；on_time=false 才視為延誤
+        if (s.on_time === false && s.actual_arrival_at) {
+          diff = Math.round((new Date(s.actual_arrival_at).getTime() - planned) / 60_000);
+        }
+      } else {
+        // 還在進行：用「現在 vs planned」算還在延誤多久
+        const ref = s.actual_arrival_at ? new Date(s.actual_arrival_at).getTime() : now;
+        diff = Math.round((ref - planned) / 60_000);
+      }
+
+      if (diff != null && diff > DELAY_THRESHOLD) {
         count++;
         if (diff > maxDelay) maxDelay = diff;
       }

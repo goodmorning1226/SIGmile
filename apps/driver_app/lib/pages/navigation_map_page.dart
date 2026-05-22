@@ -74,7 +74,15 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
         title: const Text('導航中'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/stops/${widget.taskStopId}'),
+          // 用 pop 自然回上一頁，保留整個 Navigator stack。
+          // 上次用 context.go() 會 reset stack，導致再往回時無法回到主頁。
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/stops/${widget.taskStopId}');
+            }
+          },
         ),
       ),
       body: bundleAsync.when(
@@ -240,7 +248,7 @@ class _NavigationMapPageState extends ConsumerState<NavigationMapPage> {
                         child: Row(children: [
                           Icon(Icons.open_in_new, size: 18, color: SigmileColors.brand),
                           SizedBox(width: 8),
-                          Text('用 Google Maps app（含語音）'),
+                          Text('用 Google Maps app'),
                         ]),
                       ),
                       const PopupMenuItem(

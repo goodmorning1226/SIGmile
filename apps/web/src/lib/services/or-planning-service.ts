@@ -515,8 +515,8 @@ export class MockORPlanningService implements IORPlanningService {
 
     // ---- Duration matrix（先查 DB cache，缺的才打 TomTom）----
     const depotLatLng = {
-      lat: Number(dc?.lat ?? 25.0610),
-      lng: Number(dc?.lng ?? 121.4847)
+      lat: Number(dc?.lat ?? 24.9540),  // 中壢自強一路 fallback
+      lng: Number(dc?.lng ?? 121.2270)
     };
     const nodes = [
       { id: dc?.id ?? "depot", ...depotLatLng },
