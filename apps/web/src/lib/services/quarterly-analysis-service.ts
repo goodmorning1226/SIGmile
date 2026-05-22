@@ -58,6 +58,26 @@ export interface QuarterlyStatusBreakdown {
   skipped: number;
 }
 
+/**
+ * 準時率分桶 — 把 0..100% 切 5 段（每段 20%），統計落在每段的個數。
+ * 用於「物流士準時率 donut」/「門市到貨準時率 donut」。
+ * key 順序固定，做 chart 時 ordered iterate 即可。
+ */
+export interface OnTimeBuckets {
+  /** 0~20% */
+  b0_20: number;
+  /** 20~40% */
+  b20_40: number;
+  /** 40~60% */
+  b40_60: number;
+  /** 60~80% */
+  b60_80: number;
+  /** 80~100% */
+  b80_100: number;
+  /** 全部都已派送 / 完成的個體總數（=各 bucket 加總） */
+  total: number;
+}
+
 export interface QuarterlyAnalysis {
   current: QuarterlyKpi;
   previous: QuarterlyKpi | null;  // 上一季比較
@@ -66,6 +86,10 @@ export interface QuarterlyAnalysis {
   problem_stores: ProblemStore[];
   /** 季內所有站點的最終狀態分佈（給 donut 用） */
   status_breakdown: QuarterlyStatusBreakdown;
+  /** 物流士準時率分桶（每位 driver 一個 on_time_rate，落到 5 個桶之一） */
+  driver_on_time_buckets: OnTimeBuckets;
+  /** 門市到貨準時率分桶（每家 store 一個 on_time_rate） */
+  store_on_time_buckets: OnTimeBuckets;
 }
 
 /** 把 "2026Q1" 變 ["2026-01-01", "2026-03-31"] */
@@ -420,14 +444,100 @@ async function statusBreakdown(quarter: string): Promise<QuarterlyStatusBreakdow
   return out;
 }
 
+/**
+ * 把一組 on_time_rate（0..1）丟進 5 個 bucket：[0,0.2)/[0.2,0.4)/[0.4,0.6)/[0.6,0.8)/[0.8,1]
+ */
+function bucketize(rates: number[]): OnTimeBuckets {
+  const out: OnTimeBuckets = {
+    b0_20: 0, b20_40: 0, b40_60: 0, b60_80: 0, b80_100: 0, total: 0
+  };
+  for (const r of rates) {
+    if (!Number.isFinite(r)) continue;
+    out.total++;
+    if (r < 0.2)      out.b0_20++;
+    else if (r < 0.4) out.b20_40++;
+    else if (r < 0.6) out.b40_60++;
+    else if (r < 0.8) out.b60_80++;
+    else              out.b80_100++;
+  }
+  return out;
+}
+
+/**
+ * 計算本季「物流士準時率」與「門市到貨準時率」分佈。
+ *  - 物流士準時率 = sum(on_time) / sum(completed)  per driver
+ *  - 門市準時率   = sum(on_time) / sum(completed)  per stop
+ *  - 只計入有「至少一次 completed」的個體（avoid 0/0 噪音）
+ */
+async function onTimeDistribution(quarter: string): Promise<{
+  driver: OnTimeBuckets;
+  store:  OnTimeBuckets;
+}> {
+  const admin = createSupabaseAdminClient();
+  const { start, end } = quarterRange(quarter);
+
+  // 本季 tasks
+  const { data: tasks } = await admin
+    .from("delivery_tasks")
+    .select("id, driver_id")
+    .gte("delivery_date", start)
+    .lte("delivery_date", end)
+    .returns<{ id: string; driver_id: string }[]>();
+  if (!tasks || tasks.length === 0) {
+    const empty: OnTimeBuckets = { b0_20: 0, b20_40: 0, b40_60: 0, b60_80: 0, b80_100: 0, total: 0 };
+    return { driver: empty, store: empty };
+  }
+  const taskDriver = new Map(tasks.map((t) => [t.id, t.driver_id]));
+
+  const { data: stops } = await admin
+    .from("delivery_task_stops")
+    .select("delivery_task_id, stop_id, status, on_time")
+    .in("delivery_task_id", tasks.map((t) => t.id))
+    .returns<{
+      delivery_task_id: string; stop_id: string;
+      status: string; on_time: boolean | null;
+    }[]>();
+
+  // 累計 per-driver / per-store
+  const drvAgg = new Map<string, { completed: number; on_time: number }>();
+  const stpAgg = new Map<string, { completed: number; on_time: number }>();
+
+  for (const s of stops ?? []) {
+    if (s.status !== "completed") continue;
+    const did = taskDriver.get(s.delivery_task_id);
+    if (did) {
+      const r = drvAgg.get(did) ?? { completed: 0, on_time: 0 };
+      r.completed++;
+      if (s.on_time === true) r.on_time++;
+      drvAgg.set(did, r);
+    }
+    {
+      const r = stpAgg.get(s.stop_id) ?? { completed: 0, on_time: 0 };
+      r.completed++;
+      if (s.on_time === true) r.on_time++;
+      stpAgg.set(s.stop_id, r);
+    }
+  }
+
+  const drvRates = [...drvAgg.values()]
+    .filter((r) => r.completed > 0)
+    .map((r) => r.on_time / r.completed);
+  const stpRates = [...stpAgg.values()]
+    .filter((r) => r.completed > 0)
+    .map((r) => r.on_time / r.completed);
+
+  return { driver: bucketize(drvRates), store: bucketize(stpRates) };
+}
+
 export async function getQuarterlyAnalysis(quarter: string): Promise<QuarterlyAnalysis> {
-  const [current, previous, trend, drivers, stores, breakdown] = await Promise.all([
+  const [current, previous, trend, drivers, stores, breakdown, otd] = await Promise.all([
     aggregateQuarter(quarter),
     aggregateQuarter(prevQuarter(quarter)).catch(() => null),
     monthlyTrend(quarter),
     topDrivers(quarter),
     problemStores(quarter),
-    statusBreakdown(quarter)
+    statusBreakdown(quarter),
+    onTimeDistribution(quarter)
   ]);
   return {
     current,
@@ -435,7 +545,9 @@ export async function getQuarterlyAnalysis(quarter: string): Promise<QuarterlyAn
     monthly_trend: trend,
     top_drivers: drivers,
     problem_stores: stores,
-    status_breakdown: breakdown
+    status_breakdown: breakdown,
+    driver_on_time_buckets: otd.driver,
+    store_on_time_buckets:  otd.store
   };
 }
 

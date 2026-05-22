@@ -1,21 +1,21 @@
-import { CalendarDays, TrendingUp, AlertTriangle, Store, Flame, PieChart } from "lucide-react";
+import { TrendingUp, AlertTriangle, Store, Flame, Truck, MapPin } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { StopStatusDonut } from "@/components/charts/StopStatusDonut";
+import { OnTimeBucketDonut } from "@/components/charts/OnTimeBucketDonut";
 import type { QuarterlyAnalysis, QuarterlyKpi } from "@/lib/services/quarterly-analysis-service";
 
 /**
- * 季度分析 — 嵌入 Dashboard 用（取代原本 /quarterly-analysis 獨立頁）
- *  - 跨季 KPI 比較
- *  - 季內月度趨勢
- *  - 季度摘要表
- *  - 門市異常熱點（季為期）
- *  - 已移除「物流士排行」
+ * 季度分析區塊：
+ *  1. 跨季 KPI 比較（4 張卡）
+ *  2. 季度摘要（左：上季、右：本季）滿版
+ *  3. 門市異常熱點（本季）
+ *
+ * 已移除：月度趨勢、站點狀態分佈、物流士排行。
  */
 export function QuarterlySection({
   data, quarter
 }: { data: QuarterlyAnalysis; quarter: string }) {
-  const { current, previous, monthly_trend, problem_stores, status_breakdown } = data;
+  const { current, previous, problem_stores, driver_on_time_buckets, store_on_time_buckets } = data;
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
   const delta = (cur: number, prev?: number | null) =>
     prev == null || prev === 0
@@ -57,51 +57,55 @@ export function QuarterlySection({
         />
       </section>
 
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* 月度趨勢 */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <CalendarDays className="size-4 text-brand-500" />
-              <CardTitle>月度趨勢</CardTitle>
-            </div>
-            <CardDescription>
-              {current.start_date} ~ {current.end_date}（{quarter}）
-              {previous && ` · 上季 ${previous.quarter}：${previous.completed_stops} 站完成`}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <MonthlyTrendChart points={monthly_trend} />
-          </CardContent>
-        </Card>
-
-        {/* 季度摘要 */}
-        <Card>
-          <CardHeader>
-            <CardTitle>季度摘要</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <QuarterRow label="本季" v={current} />
-            {previous && <QuarterRow label="上季" v={previous} />}
-          </CardContent>
-        </Card>
-      </section>
-
-      {/* 站點狀態分佈（季）— 從今日總覽搬過來的視覺化 */}
+      {/* 季度摘要 — 滿版，左：上季 / 右：本季 */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <PieChart className="size-4 text-brand-500" />
-            <CardTitle>站點狀態分佈（本季）</CardTitle>
-          </div>
+          <CardTitle>季度摘要</CardTitle>
           <CardDescription>
-            本季所有站點的最終狀態加總
+            {current.start_date} ~ {current.end_date}（{quarter}）
+            {previous && ` · 與上季 ${previous.quarter} 比較`}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <StopStatusDonut data={status_breakdown} />
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <QuarterColumn label="上季" v={previous} align="left" />
+            <QuarterColumn label="本季" v={current}  align="right" />
+          </div>
         </CardContent>
       </Card>
+
+      {/* 準時率分佈 — 左：物流士、右：門市 */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Truck className="size-4 text-brand-500" />
+              <CardTitle>物流士準時率</CardTitle>
+            </div>
+            <CardDescription>
+              本季每位物流士的準時率落在哪個 20% 區間（紅 → 綠 = 差 → 好）
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OnTimeBucketDonut data={driver_on_time_buckets} centerLabel="位物流士" />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <MapPin className="size-4 text-brand-500" />
+              <CardTitle>門市到貨準時率</CardTitle>
+            </div>
+            <CardDescription>
+              本季每家門市的到貨準時率分佈，反映哪些門市常被延誤
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OnTimeBucketDonut data={store_on_time_buckets} centerLabel="家門市" />
+          </CardContent>
+        </Card>
+      </section>
 
       {/* 門市異常熱點 — 季為期 */}
       <Card>
@@ -186,48 +190,56 @@ function KpiCompareCard({
   );
 }
 
-function QuarterRow({ label, v }: { label: string; v: QuarterlyKpi }) {
-  return (
-    <div>
-      <div className="text-xs font-semibold text-slate-500">{label}（{v.quarter}）</div>
-      <div className="mt-1 grid grid-cols-2 gap-y-1 text-xs">
-        <div className="text-slate-500">任務數</div>
-        <div className="text-right font-medium tabular-nums">{v.total_tasks}</div>
-        <div className="text-slate-500">總站數</div>
-        <div className="text-right font-medium tabular-nums">{v.total_stops}</div>
-        <div className="text-slate-500">完成率</div>
-        <div className="text-right font-medium tabular-nums">{(v.completion_rate * 100).toFixed(1)}%</div>
-        <div className="text-slate-500">準時率</div>
-        <div className="text-right font-medium tabular-nums">{(v.on_time_rate * 100).toFixed(1)}%</div>
-        <div className="text-slate-500">物流士數</div>
-        <div className="text-right font-medium tabular-nums">{v.unique_drivers}</div>
-      </div>
-    </div>
-  );
-}
-
-function MonthlyTrendChart({ points }: { points: { ym: string; completed: number; on_time: number; exceptions: number }[] }) {
-  if (points.length === 0) {
-    return <p className="text-sm text-slate-500">本季尚無任何配送資料</p>;
-  }
-  const maxBar = Math.max(...points.map((p) => p.completed));
-  return (
-    <div className="space-y-2">
-      {points.map((p) => (
-        <div key={p.ym} className="flex items-center gap-3">
-          <div className="w-16 shrink-0 font-mono text-xs text-slate-500">{p.ym}</div>
-          <div className="flex-1 overflow-hidden rounded-full bg-slate-100">
-            <div
-              className="h-6 bg-brand-500 transition-all"
-              style={{ width: maxBar === 0 ? "0%" : `${(p.completed / maxBar) * 100}%` }}
-            />
-          </div>
-          <div className="w-24 shrink-0 text-right text-xs">
-            <span className="font-semibold tabular-nums text-slate-900">{p.completed}</span>
-            <span className="text-slate-400"> / 準時 {p.on_time}</span>
-          </div>
+function QuarterColumn({
+  label, v, align
+}: {
+  label: string;
+  v: QuarterlyKpi | null;
+  align: "left" | "right";
+}) {
+  const border =
+    align === "left"
+      ? "md:border-r md:border-slate-100 md:pr-6"
+      : "md:pl-6";
+  if (!v) {
+    return (
+      <div className={border}>
+        <div className="mb-3 text-sm font-semibold text-slate-700">{label}</div>
+        <div className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
+          無資料
         </div>
-      ))}
+      </div>
+    );
+  }
+  return (
+    <div className={border}>
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold text-slate-700">{label}</span>
+        <span className="text-xs font-mono text-slate-400">{v.quarter}</span>
+      </div>
+      <dl className="grid grid-cols-2 gap-y-2 text-sm">
+        <dt className="text-slate-500">任務數</dt>
+        <dd className="text-right font-medium tabular-nums text-slate-900">{v.total_tasks}</dd>
+
+        <dt className="text-slate-500">派送次數</dt>
+        <dd className="text-right font-medium tabular-nums text-slate-900">{v.total_stops}</dd>
+
+        <dt className="text-slate-500">服務門市數</dt>
+        <dd className="text-right font-medium tabular-nums text-slate-900">{v.unique_stores}</dd>
+
+        <dt className="text-slate-500">完成率</dt>
+        <dd className="text-right font-medium tabular-nums text-slate-900">
+          {(v.completion_rate * 100).toFixed(1)}%
+        </dd>
+
+        <dt className="text-slate-500">準時率</dt>
+        <dd className="text-right font-medium tabular-nums text-slate-900">
+          {(v.on_time_rate * 100).toFixed(1)}%
+        </dd>
+
+        <dt className="text-slate-500">物流士數</dt>
+        <dd className="text-right font-medium tabular-nums text-slate-900">{v.unique_drivers}</dd>
+      </dl>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition, useMemo } from "react";
 import {
   AlertTriangle, RefreshCw, LifeBuoy, Loader2,
-  X, MapPin, Sparkles, Users
+  X, MapPin, Sparkles, Users, Wand2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -68,6 +68,9 @@ export function EmergencyBoard() {
   const [pendingCandidates, setPendingCandidates] = useState<string | null>(null);
   const [pendingApply, setPendingApply] = useState<string | null>(null);
 
+  // AI 一鍵派遣（呼叫 /api/manager/emergency/plan + /apply）
+  const [aiBatchPending, setAiBatchPending] = useState(false);
+
   const load = () => {
     setError(null);
     startLoad(async () => {
@@ -111,6 +114,55 @@ export function EmergencyBoard() {
   const closeReassign = () => {
     setActiveDriver(null);
     setPendingStops(null);
+  };
+
+  /**
+   * AI 一鍵派遣 — 把該 driver 全部 pending stops 直接套用 AI 排程方案：
+   *  1. POST /api/manager/emergency/plan → 得到全 stops 的最佳目標 driver
+   *  2. POST /api/manager/emergency/apply → 一次寫回 delivery_task_stops
+   *  3. 重抓 pending stops + driver snapshot
+   * 套用後使用者仍可繼續用 「選擇物流士 / AI 派遣建議」對個別站做調整（移到下一個 driver 的 dialog）。
+   */
+  const aiBatchDispatch = async () => {
+    if (!activeDriver) return;
+    if (!confirm(
+      `用 AI 一鍵派遣這 ${activeDriver.pending_stops} 個 pending stops 嗎？\n` +
+      `AI 會幫每個 stop 挑最佳的接手 driver；套用後你仍可逐站手動調整。`
+    )) return;
+
+    setError(null);
+    setAiBatchPending(true);
+    try {
+      // 1) 拿到 AI 規劃方案
+      const planRes = await fetch("/api/manager/emergency/plan", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ down_driver_id: activeDriver.driver_id, date })
+      });
+      const planJ = await planRes.json();
+      if (!planJ.ok) {
+        setError(planJ.error?.message ?? "AI 規劃失敗");
+        return;
+      }
+      // 2) 直接套用
+      const applyRes = await fetch("/api/manager/emergency/apply", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ plan: planJ.data })
+      });
+      const applyJ = await applyRes.json();
+      if (!applyJ.ok) {
+        setError(applyJ.error?.message ?? "套用失敗");
+        return;
+      }
+      // 3) 重抓資料
+      openReassign(activeDriver);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "未知錯誤");
+    } finally {
+      setAiBatchPending(false);
+    }
   };
 
   const fetchCandidates = async (taskStopId: string, mode: DispatchMode) => {
@@ -325,7 +377,27 @@ export function EmergencyBoard() {
                   此物流士目前已無 pending stops。
                 </div>
               ) : (
-                <ul className="space-y-2">
+                <>
+                  {/* AI 一鍵派遣 — 套用後仍可對每個站手動調整 */}
+                  <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-brand-200 bg-brand-50/60 px-3 py-2 text-sm">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Wand2 className="size-4 shrink-0 text-brand-500" />
+                      <span className="text-slate-700">
+                        AI 會用 cheapest-insertion 把 {pendingStops.length} 個 stop 自動分到其他物流士；
+                        套用後仍可逐站調整。
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={aiBatchDispatch}
+                      loading={aiBatchPending}
+                      className="shrink-0"
+                    >
+                      <Wand2 className="size-3.5" />
+                      AI 一鍵派遣
+                    </Button>
+                  </div>
+                  <ul className="space-y-2">
                   {pendingStops.map((s) => (
                     <li
                       key={s.task_stop_id}
@@ -376,7 +448,8 @@ export function EmergencyBoard() {
                       </div>
                     </li>
                   ))}
-                </ul>
+                  </ul>
+                </>
               )}
             </CardContent>
           </Card>
