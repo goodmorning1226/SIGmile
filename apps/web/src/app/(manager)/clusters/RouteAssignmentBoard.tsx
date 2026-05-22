@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
   Save, RotateCcw, Check, AlertCircle, Truck, Warehouse,
-  GripVertical, X, Move
+  X, Move
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -521,13 +521,16 @@ function RouteStrip({
         )}
       </CardContent>
 
-      {/* 拖動中的 Ghost — fixed + portal，跟著游標 */}
+      {/* 拖動中的 Ghost — fixed + portal，跟著游標（與 StopBox 同款 pill 樣式） */}
       {ghost && typeof document !== "undefined" && createPortal(
         <div
           className="pointer-events-none fixed z-[9999] -translate-x-1/2 -translate-y-1/2"
           style={{ left: ghost.x, top: ghost.y }}
         >
-          <div className="flex h-16 min-w-[6.5rem] items-center justify-center rounded-md border-2 border-brand-400 bg-white px-3 text-sm font-medium text-slate-900 shadow-lg opacity-90">
+          <div className="inline-flex h-9 items-center gap-2 rounded-full border-2 border-brand-400 bg-white pl-1 pr-3.5 text-sm font-medium text-slate-900 shadow-lg opacity-95">
+            <span className="grid size-7 shrink-0 place-items-center rounded-full bg-brand-500 text-white text-[12px] font-bold tabular-nums">
+              ⇅
+            </span>
             <span className="truncate max-w-[7rem]">{ghost.name}</span>
           </div>
         </div>,
@@ -586,12 +589,15 @@ function StopBox({
 
   return (
     <>
+      {/*
+        Pill-shaped chip：左邊橘圈編號、右邊門市名稱。
+        Hover 顯示 portal tooltip（含地址、箱數、服務時間），保留拖移功能。
+      */}
       <div
         ref={boxRef}
         role="button"
         tabIndex={readOnly ? -1 : 0}
         onPointerDown={(e) => {
-          // 拖動中的 source 用 opacity 隱形，pointer events 停掉避免 hit-test 自己
           if (readOnly) return;
           onPointerDown(e);
         }}
@@ -603,22 +609,20 @@ function StopBox({
         }}
         onMouseLeave={() => setHovering(false)}
         className={cn(
-          "relative flex h-16 min-w-[6.5rem] flex-col items-center justify-center",
-          "rounded-md border bg-white px-3 text-sm transition select-none",
-          "shrink-0 touch-none",  // touch-none 讓 pointer events 不被 touch scroll 吃掉
+          "relative inline-flex h-9 items-center gap-2 rounded-full border bg-white pl-1 pr-3.5",
+          "text-sm font-medium text-slate-800 transition select-none shrink-0 touch-none",
           readOnly
             ? "border-slate-200 cursor-default"
             : "border-slate-300 cursor-grab active:cursor-grabbing hover:border-brand-400 hover:shadow-sm",
           isDragSource && "opacity-30 ring-2 ring-brand-300 pointer-events-none"
         )}
       >
-        <span className="absolute top-1 left-1 grid size-4 place-items-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-600">
+        {/* 左側橘圈編號 */}
+        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-brand-500 text-white text-[12px] font-bold tabular-nums shadow-sm">
           {index + 1}
         </span>
-        {!readOnly && (
-          <GripVertical className="absolute top-1 right-1 size-3 text-slate-300" />
-        )}
-        <span className="truncate max-w-[6rem] font-medium text-slate-900">
+        {/* 右側門市名稱 */}
+        <span className="truncate max-w-[7rem] text-slate-900">
           {stop.stop_name}
         </span>
       </div>
@@ -697,20 +701,20 @@ function StopBox({
 }
 
 /* ============================================================
- * DepotNode — 廠房節點
+ * DepotNode — 廠房節點（與 StopBox pill 同高度）
  * ========================================================== */
 function DepotNode({ label, dashed = false }: { label: string; dashed?: boolean }) {
   return (
     <div
       className={cn(
-        "flex h-16 w-14 flex-col items-center justify-center rounded-md px-2 text-xs shrink-0",
+        "inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-semibold whitespace-nowrap shrink-0",
         dashed
           ? "border-2 border-dashed border-amber-400 bg-amber-50 text-amber-800"
           : "border border-slate-300 bg-slate-100 text-slate-600"
       )}
     >
       <Warehouse className="size-3.5" />
-      <span className="mt-0.5 font-semibold whitespace-nowrap">{label}</span>
+      {label}
     </div>
   );
 }
@@ -720,9 +724,9 @@ function DepotNode({ label, dashed = false }: { label: string; dashed?: boolean 
  * ========================================================== */
 function TripDivider() {
   return (
-    <div className="relative flex h-16 w-6 items-center justify-center shrink-0">
+    <div className="relative flex h-9 w-7 items-center justify-center shrink-0">
       <div className="h-full border-l-2 border-dashed border-amber-400" />
-      <span className="absolute -top-1 left-1/2 -translate-x-1/2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 whitespace-nowrap">
+      <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 whitespace-nowrap">
         第 2 趟
       </span>
     </div>
@@ -807,12 +811,12 @@ function DropSlot({
       data-drop-slot=""
       data-insertat={insertAt}
       data-trip={trip}
-      className="relative h-16 w-6 shrink-0"
+      className="relative h-9 w-6 shrink-0"
     >
       {active && (
-        <div className="absolute inset-y-0 -left-1 -right-1 grid place-items-center rounded-md border-2 border-dashed border-brand-500 bg-brand-50 pointer-events-none">
+        <div className="absolute inset-y-0 -left-1 -right-1 grid place-items-center rounded-full border-2 border-dashed border-brand-500 bg-brand-50 pointer-events-none">
           <span className="text-[10px] font-medium text-brand-600 select-none">
-            放開插入
+            插入
           </span>
         </div>
       )}

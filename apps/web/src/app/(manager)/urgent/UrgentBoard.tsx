@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, useMemo } from "react";
 import {
-  Sparkles, Trash2, Plus, Zap, Snowflake, Clock,
-  Phone, CheckCircle2, Truck, RefreshCw, X
+  Sparkles, Zap, Clock, Phone, CheckCircle2, Truck,
+  RefreshCw, X, Users
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,7 +29,7 @@ interface UrgentShipment {
   assigned_at: string | null;
 }
 
-interface DriverCandidate {
+export interface DriverCandidate {
   driver_id: string;
   driver_name: string;
   employee_code: string | null;
@@ -67,14 +67,16 @@ const TEMP_ICON: Record<string, string> = {
   mixed:   "🎁"
 };
 
+/** 派遣對話框的呈現模式：AI 排名 vs. 物流士清單（依姓名） */
+type DispatchMode = "ai" | "list";
+
 export function UrgentBoard() {
   const [items, setItems] = useState<UrgentShipment[]>([]);
   const [pendingFetch, startFetch] = useTransition();
-  const [pendingGen, startGen] = useTransition();
-  const [pendingClear, startClear] = useTransition();
   const [pendingDispatch, setPendingDispatch] = useState<string | null>(null);
   const [pendingApply, setPendingApply] = useState<string | null>(null);
   const [dispatchResult, setDispatchResult] = useState<DispatchResult | null>(null);
+  const [dispatchMode, setDispatchMode] = useState<DispatchMode>("ai");
   const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
@@ -90,39 +92,10 @@ export function UrgentBoard() {
     });
   };
 
-  const generate = () => {
-    setError(null);
-    startGen(async () => {
-      try {
-        const res = await fetch("/api/manager/urgent/mock", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ count: 5 })
-        });
-        const j = await res.json();
-        if (!j.ok) {
-          setError(j.error?.message ?? "產生失敗");
-          return;
-        }
-        refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "未知錯誤");
-      }
-    });
-  };
-
-  const clearAll = () => {
-    if (!confirm("清空所有急件？(in-memory 重置)")) return;
-    startClear(async () => {
-      await fetch("/api/manager/urgent", { method: "DELETE" });
-      setItems([]);
-      setDispatchResult(null);
-    });
-  };
-
-  const dispatch = async (id: string) => {
+  const dispatch = async (id: string, mode: DispatchMode) => {
     setError(null);
     setPendingDispatch(id);
+    setDispatchMode(mode);
     try {
       const res = await fetch(`/api/manager/urgent/${id}/dispatch`, { method: "POST" });
       const j = await res.json();
@@ -152,14 +125,6 @@ export function UrgentBoard() {
         setError(j.error?.message ?? "派遣寫入失敗");
         return;
       }
-      const d = j.data as {
-        inserted_task_stop_id: string; insertion_position: number;
-        task_auto_created?: boolean; delivery_date?: string;
-      };
-      if (d.task_auto_created) {
-        // 不擋流程，只是 console + 訊息提示，後面 refresh
-        console.info(`[urgent] 自動為此 driver 建立 ${d.delivery_date} 的 delivery_task（先前無）`);
-      }
       setDispatchResult(null);
       refresh();
     } catch (e) {
@@ -171,22 +136,30 @@ export function UrgentBoard() {
 
   useEffect(refresh, []);
 
+  // 待派的放前面、已派遣 / 完成 / 取消 推到後面，內部依 priority + created_at 排
+  const sortedItems = useMemo(() => {
+    const rank = (s: UrgentShipment["status"]) =>
+      s === "pending" ? 0 : s === "assigned" ? 1 : s === "completed" ? 2 : 3;
+    const prio = (p: UrgentShipment["priority"]) =>
+      p === "p0_critical" ? 0 : p === "p1_high" ? 1 : 2;
+    return [...items].sort((a, b) => {
+      if (rank(a.status) !== rank(b.status)) return rank(a.status) - rank(b.status);
+      if (prio(a.priority) !== prio(b.priority)) return prio(a.priority) - prio(b.priority);
+      return a.created_at.localeCompare(b.created_at);
+    });
+  }, [items]);
+
+  const pendingCount = items.filter((x) => x.status === "pending").length;
+  const assignedCount = items.filter((x) => x.status === "assigned").length;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={generate} loading={pendingGen}>
-          <Plus className="size-4" /> 產生 5 筆 Mock 急件
-        </Button>
         <Button variant="outline" onClick={refresh} loading={pendingFetch}>
           <RefreshCw className="size-4" /> 重新整理
         </Button>
-        {items.length > 0 && (
-          <Button variant="ghost" onClick={clearAll} loading={pendingClear}>
-            <Trash2 className="size-4" /> 清空全部
-          </Button>
-        )}
         <span className="ml-auto text-xs text-slate-500">
-          {items.length} 筆急件 · 待派 {items.filter((x) => x.status === "pending").length} 筆
+          共 {items.length} 筆 · 待派 {pendingCount} · 已派 {assignedCount}
         </span>
       </div>
 
@@ -200,24 +173,32 @@ export function UrgentBoard() {
         <Card>
           <CardContent className="py-12 text-center text-sm text-slate-500">
             <Zap className="mx-auto mb-2 size-8 text-amber-300" />
-            目前沒有任何急件。按上方「產生 Mock 急件」開始 demo。
+            目前沒有任何急件。
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {items.map((u) => {
+          {sortedItems.map((u) => {
             const prio = PRIORITY_LABEL[u.priority];
+            const isAssigned = u.status === "assigned";
             return (
-              <Card key={u.id}>
+              <Card
+                key={u.id}
+                className={isAssigned ? "opacity-70 bg-slate-50/40" : undefined}
+              >
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <Badge tone={prio.tone}>{prio.label}</Badge>
-                        <span className="text-lg leading-none">{TEMP_ICON[u.temperature] ?? "📦"}</span>
+                        <span className="text-lg leading-none">
+                          {TEMP_ICON[u.temperature] ?? "📦"}
+                        </span>
                         <span className="text-xs text-slate-400">{u.id}</span>
                       </div>
-                      <div className="mt-2 font-semibold text-slate-900">{u.stop_name}</div>
+                      <div className="mt-2 font-semibold text-slate-900">
+                        {u.stop_name}
+                      </div>
                       <div className="text-xs text-slate-500">{u.stop_address}</div>
                     </div>
                     <div className="text-right text-xs text-slate-500">
@@ -244,19 +225,31 @@ export function UrgentBoard() {
                   )}
 
                   <div className="mt-3 border-t border-slate-100 pt-3">
-                    {u.status === "assigned" ? (
+                    {isAssigned ? (
                       <div className="flex items-center gap-2 text-sm">
                         <CheckCircle2 className="size-4 text-accent-600" />
-                        <span className="text-slate-700">已派遣給 <strong>{u.assigned_driver_name}</strong></span>
+                        <span className="text-slate-700">
+                          已派遣給 <strong>{u.assigned_driver_name}</strong>
+                        </span>
                       </div>
                     ) : u.status === "pending" ? (
-                      <Button
-                        size="sm"
-                        onClick={() => dispatch(u.id)}
-                        loading={pendingDispatch === u.id}
-                      >
-                        <Sparkles className="size-4" /> AI 派遣建議
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => dispatch(u.id, "list")}
+                          loading={pendingDispatch === u.id && dispatchMode === "list"}
+                        >
+                          <Users className="size-4" /> 選擇物流士
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => dispatch(u.id, "ai")}
+                          loading={pendingDispatch === u.id && dispatchMode === "ai"}
+                        >
+                          <Sparkles className="size-4" /> AI 派遣建議
+                        </Button>
+                      </div>
                     ) : (
                       <span className="text-xs text-slate-500">狀態：{u.status}</span>
                     )}
@@ -269,90 +262,127 @@ export function UrgentBoard() {
       )}
 
       {dispatchResult && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-6 backdrop-blur-sm">
-          <Card className="my-8 w-full max-w-3xl">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <CardTitle>AI 派遣建議</CardTitle>
-                  <div className="mt-1 text-xs text-slate-500">
-                    急件 {dispatchResult.urgent.stop_name} · {dispatchResult.urgent.demand_boxes} 箱 ·
-                    {" "}評估了 {dispatchResult.context.drivers_evaluated} 位物流士
-                  </div>
-                </div>
-                <button
-                  onClick={() => setDispatchResult(null)}
-                  className="text-slate-400 hover:text-slate-700"
-                >
-                  <X className="size-5" />
-                </button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <ol className="space-y-2">
-                {dispatchResult.candidates.map((c) => {
-                  const blocked = !c.details.temperature_match || c.details.remaining_capacity < dispatchResult.urgent.demand_boxes;
-                  return (
-                    <li
-                      key={c.driver_id}
-                      className={
-                        "rounded-md border p-3 " +
-                        (c.rank === 1 && !blocked
-                          ? "border-accent-300 bg-accent-50/50"
-                          : "border-slate-200 bg-slate-50/30")
-                      }
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className={
-                          "grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold " +
-                          (c.rank === 1 && !blocked
-                            ? "bg-accent-500 text-white"
-                            : "bg-slate-200 text-slate-600")
-                        }>
-                          #{c.rank}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <Truck className="size-3.5 text-slate-500" />
-                            <span className="font-semibold">{c.driver_name}</span>
-                            {c.employee_code && (
-                              <span className="text-xs text-slate-400">{c.employee_code}</span>
-                            )}
-                            <span className="ml-auto font-mono text-sm tabular-nums text-slate-700">
-                              {(c.score * 100).toFixed(1)} 分
-                            </span>
-                          </div>
-                          <div className="mt-1 text-xs text-slate-600">{c.reason}</div>
-                          <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px]">
-                            <Chip>{c.details.distance_km.toFixed(1)} km</Chip>
-                            <Chip>剩 {c.details.remaining_capacity} 箱</Chip>
-                            <Chip>pending {c.details.pending_stops}</Chip>
-                            <Chip>插入 Δ {c.insertion_delta_km.toFixed(1)} km</Chip>
-                            {!c.details.shift_match && <Chip tone="danger">班別不符</Chip>}
-                            {!c.details.temperature_match && <Chip tone="danger">溫層不符</Chip>}
-                            {c.details.remaining_capacity < dispatchResult.urgent.demand_boxes && (
-                              <Chip tone="danger">容量不足</Chip>
-                            )}
-                          </div>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant={blocked ? "outline" : "primary"}
-                          disabled={blocked}
-                          onClick={() => apply(dispatchResult.urgent.id, c.driver_id)}
-                          loading={pendingApply === c.driver_id}
-                        >
-                          確認派遣
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            </CardContent>
-          </Card>
-        </div>
+        <DispatchDialog
+          result={dispatchResult}
+          mode={dispatchMode}
+          onClose={() => setDispatchResult(null)}
+          onApply={(driverId) => apply(dispatchResult.urgent.id, driverId)}
+          pendingApply={pendingApply}
+        />
       )}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────
+ * 派遣對話框 — 共用「AI 排名」與「物流士清單」兩種模式
+ *   - mode="ai"   → 依分數排序（已是 server 給的順序）
+ *   - mode="list" → 依姓名 / employee_code 排序，每位皆可選
+ *   兩種模式都顯示相同的物流士詳情（距離、容量、班別、溫層、繞路 Δ…）
+ * ──────────────────────────────────────────────────────────── */
+export function DispatchDialog({
+  result, mode, onClose, onApply, pendingApply
+}: {
+  result: DispatchResult;
+  mode: DispatchMode;
+  onClose: () => void;
+  onApply: (driverId: string) => void;
+  pendingApply: string | null;
+}) {
+  const items = useMemo(() => {
+    if (mode === "ai") return result.candidates;
+    // list 模式：依姓名排序，並重新標 rank
+    return [...result.candidates]
+      .sort((a, b) =>
+        (a.employee_code ?? a.driver_name).localeCompare(b.employee_code ?? b.driver_name)
+      )
+      .map((c, i) => ({ ...c, rank: i + 1 }));
+  }, [result.candidates, mode]);
+
+  const title = mode === "ai" ? "AI 派遣建議" : "選擇物流士";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-6 backdrop-blur-sm">
+      <Card className="my-8 w-full max-w-3xl">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <CardTitle>{title}</CardTitle>
+              <div className="mt-1 text-xs text-slate-500">
+                急件 {result.urgent.stop_name} · {result.urgent.demand_boxes} 箱 ·
+                {" "}{mode === "ai" ? `評估了 ${result.context.drivers_evaluated} 位物流士` : `共 ${result.context.drivers_evaluated} 位物流士可選`}
+              </div>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-700">
+              <X className="size-5" />
+            </button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <ol className="space-y-2">
+            {items.map((c) => {
+              const blocked = !c.details.temperature_match
+                || c.details.remaining_capacity < result.urgent.demand_boxes;
+              const recommended = mode === "ai" && c.rank === 1 && !blocked;
+              return (
+                <li
+                  key={c.driver_id}
+                  className={
+                    "rounded-md border p-3 " +
+                    (recommended
+                      ? "border-accent-300 bg-accent-50/50"
+                      : "border-slate-200 bg-slate-50/30")
+                  }
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={
+                      "grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold " +
+                      (recommended ? "bg-accent-500 text-white" : "bg-slate-200 text-slate-600")
+                    }>
+                      {mode === "ai" ? `#${c.rank}` : <Truck className="size-4" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Truck className="size-3.5 text-slate-500" />
+                        <span className="font-semibold">{c.driver_name}</span>
+                        {c.employee_code && (
+                          <span className="text-xs text-slate-400">{c.employee_code}</span>
+                        )}
+                        {mode === "ai" && (
+                          <span className="ml-auto font-mono text-sm tabular-nums text-slate-700">
+                            {(c.score * 100).toFixed(1)} 分
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600">{c.reason}</div>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px]">
+                        <Chip>{c.details.distance_km.toFixed(1)} km</Chip>
+                        <Chip>剩 {c.details.remaining_capacity} 箱</Chip>
+                        <Chip>pending {c.details.pending_stops}</Chip>
+                        <Chip>插入 Δ {c.insertion_delta_km.toFixed(1)} km</Chip>
+                        {!c.details.shift_match && <Chip tone="danger">班別不符</Chip>}
+                        {!c.details.temperature_match && <Chip tone="danger">溫層不符</Chip>}
+                        {c.details.remaining_capacity < result.urgent.demand_boxes && (
+                          <Chip tone="danger">容量不足</Chip>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={blocked ? "outline" : "primary"}
+                      disabled={blocked}
+                      onClick={() => onApply(c.driver_id)}
+                      loading={pendingApply === c.driver_id}
+                    >
+                      確認派遣
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </CardContent>
+      </Card>
     </div>
   );
 }

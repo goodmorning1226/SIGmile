@@ -4,9 +4,11 @@ import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status/StatusBadge";
-import { MapPlaceholder } from "@/components/map/MapPlaceholder";
+import { RouteMap } from "@/components/map/RouteMap";
+import { InteractiveRouteMap } from "@/components/map/InteractiveRouteMap";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getRouteMapData } from "@/lib/services/route-map-service";
 import { ReorderTable } from "./ReorderTable";
 
 export const dynamic = "force-dynamic";
@@ -125,10 +127,42 @@ export default async function DriverDetailPage({ params }: PageProps) {
   const completed = stops.filter((s) => s.status === "completed").length;
   const total = stops.length;
 
-  const pins = stops.map((s) => {
-    const stop = pickFirst(s.stop);
-    return { lat: stop?.lat ?? null, lng: stop?.lng ?? null, label: `${s.stop_order}. ${stop?.name ?? "?"}` };
-  });
+  // 撈 DC 座標（取此 driver 所屬的 distribution_center）— 一次 join 完
+  const { data: dcJoin } = await admin
+    .from("profiles")
+    .select("distribution_center:distribution_centers(lat, lng)")
+    .eq("id", driverId)
+    .maybeSingle<{
+      distribution_center:
+        | { lat: number | null; lng: number | null }
+        | { lat: number | null; lng: number | null }[]
+        | null;
+    }>();
+  const dcRow = pickFirst(dcJoin?.distribution_center);
+  const depot =
+    dcRow?.lat != null && dcRow?.lng != null
+      ? { lat: dcRow.lat, lng: dcRow.lng }
+      : null;
+
+  const mapStops = stops
+    .map((s) => {
+      const st = pickFirst(s.stop);
+      return st?.lat != null && st?.lng != null
+        ? {
+            lat: st.lat, lng: st.lng,
+            name: st.name,
+            order: s.stop_order,
+            status: s.status
+          }
+        : null;
+    })
+    .filter((x): x is { lat: number; lng: number; name: string; order: number; status: string } => x !== null);
+
+  // 同時 server-side 抓 TomTom 路線 polyline + Static Map URL
+  const mapData = await getRouteMapData({ depot, stops: mapStops });
+  // 把 TOMTOM_API_KEY 帶到 client side 給可互動的 TomTom Maps SDK 用
+  // （key 會出現在 HTML，請在 TomTom Dashboard 限定網域）
+  const tomtomKey = process.env.TOMTOM_API_KEY ?? null;
 
   return (
     <>
@@ -151,7 +185,9 @@ export default async function DriverDetailPage({ params }: PageProps) {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle>位置與路線</CardTitle>
-                  <CardDescription>未來會接 Google Maps，目前顯示佔位</CardDescription>
+                  <CardDescription>
+                    DC + 所有停靠點 · TomTom 計算的真實道路路線
+                  </CardDescription>
                 </div>
                 <div className="text-right">
                   <div className="text-3xl font-semibold tabular-nums text-brand-600">
@@ -164,7 +200,18 @@ export default async function DriverDetailPage({ params }: PageProps) {
               </div>
             </CardHeader>
             <CardContent>
-              <MapPlaceholder pins={pins} height={420} />
+              {mapData ? (
+                tomtomKey ? (
+                  <InteractiveRouteMap data={mapData} apiKey={tomtomKey} height={480} />
+                ) : (
+                  // 無 API key 時 fallback 到靜態圖
+                  <RouteMap data={mapData} />
+                )
+              ) : (
+                <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-12 text-center text-sm text-slate-500">
+                  尚無有效座標可顯示地圖
+                </div>
+              )}
             </CardContent>
           </Card>
 

@@ -545,3 +545,367 @@ export async function applyReroute(plan: ReroutePlan): Promise<{ moved: number; 
 
   return { moved, skipped };
 }
+
+// ─────────────────────────────────────────────────────────────
+// Per-stop 重派（給「重新派遣方案 → 選擇物流士 / AI 派遣建議」用）
+// ─────────────────────────────────────────────────────────────
+
+export interface PendingStopRow {
+  task_stop_id: string;
+  stop_id: string;
+  stop_name: string;
+  stop_external_code: string | null;
+  stop_address: string | null;
+  lat: number | null;
+  lng: number | null;
+  demand_boxes: number;
+  temperature: string | null;
+  preferred_shift: string | null;
+  stop_order: number;
+  planned_arrival_at: string | null;
+  service_minutes: number | null;
+}
+
+/** 撈某 driver 今日（或指定日期）所有 pending / navigating 的 task_stops，給 UI 列表用 */
+export async function getDriverPendingStops(opts: {
+  driver_id: string;
+  date?: string;
+}): Promise<{ date: string; driver_id: string; stops: PendingStopRow[] }> {
+  const admin = createSupabaseAdminClient();
+  const date = opts.date ?? todayInTaipei();
+
+  const { data: task } = await admin
+    .from("delivery_tasks")
+    .select("id")
+    .eq("driver_id", opts.driver_id)
+    .eq("delivery_date", date)
+    .maybeSingle<{ id: string }>();
+  if (!task) return { date, driver_id: opts.driver_id, stops: [] };
+
+  const { data: rows } = await admin
+    .from("delivery_task_stops")
+    .select(
+      "id, stop_id, stop_order, status, planned_arrival_at, " +
+        "stop:stops(name, external_code, address, lat, lng, temperature_type, " +
+        "shift, avg_delivery_volume, default_service_minutes)"
+    )
+    .eq("delivery_task_id", task.id)
+    .in("status", ["pending", "navigating"])
+    .order("stop_order", { ascending: true })
+    .returns<TaskStopRow[]>();
+
+  const stops: PendingStopRow[] = (rows ?? []).map((r) => {
+    const s = pickFirst(r.stop);
+    return {
+      task_stop_id: r.id,
+      stop_id: r.stop_id,
+      stop_name: s?.name ?? r.stop_id,
+      stop_external_code: s?.external_code ?? null,
+      stop_address: (s as { address?: string | null } | null)?.address ?? null,
+      lat: s?.lat ?? null,
+      lng: s?.lng ?? null,
+      demand_boxes: s?.avg_delivery_volume ?? 0,
+      temperature: s?.temperature_type ?? null,
+      preferred_shift: s?.shift ?? null,
+      stop_order: r.stop_order,
+      planned_arrival_at: r.planned_arrival_at,
+      service_minutes: s?.default_service_minutes ?? null
+    };
+  });
+
+  return { date, driver_id: opts.driver_id, stops };
+}
+
+export interface StopMoveCandidate {
+  driver_id: string;
+  driver_name: string;
+  employee_code: string | null;
+  score: number;
+  rank: number;
+  reason: string;
+  details: {
+    distance_km: number;
+    remaining_capacity: number;
+    shift_match: boolean;
+    temperature_match: boolean;
+    pending_stops: number;
+    last_known_position: { lat: number; lng: number } | null;
+  };
+  insertion_delta_km: number;
+  insertion_after_index: number;
+}
+
+/**
+ * 給定一個 task_stop_id，算出其他 driver 接這站的候選清單與分數
+ * （與急件派遣的 scoring 完全一樣，差別只是來源不是 in-memory 急件 store）
+ */
+export async function suggestDriversForStop(opts: {
+  task_stop_id: string;
+  /** 要排除的 driver（通常是 down driver 自己） */
+  exclude_driver_id: string;
+  date?: string;
+}): Promise<{
+  stop: PendingStopRow & { from_driver_id: string };
+  candidates: StopMoveCandidate[];
+  context: { drivers_evaluated: number; date: string };
+}> {
+  const admin = createSupabaseAdminClient();
+  const date = opts.date ?? todayInTaipei();
+
+  // 找這個 task_stop 屬於哪個 task / driver / 哪個 stop
+  const { data: tsRow } = await admin
+    .from("delivery_task_stops")
+    .select(
+      "id, stop_id, stop_order, planned_arrival_at, delivery_task_id, " +
+        "task:delivery_tasks(driver_id), " +
+        "stop:stops(name, external_code, address, lat, lng, temperature_type, " +
+        "shift, avg_delivery_volume, default_service_minutes)"
+    )
+    .eq("id", opts.task_stop_id)
+    .maybeSingle<{
+      id: string; stop_id: string; stop_order: number;
+      planned_arrival_at: string | null; delivery_task_id: string;
+      task: { driver_id: string } | Array<{ driver_id: string }> | null;
+      stop: TaskStopRow["stop"];
+    }>();
+  if (!tsRow) throw new Error(`task_stop ${opts.task_stop_id} not found`);
+  const meta = pickFirst(tsRow.stop);
+  const fromDriverId = pickFirst(tsRow.task)?.driver_id ?? opts.exclude_driver_id;
+  if (meta?.lat == null || meta?.lng == null) {
+    throw new Error("該站無經緯度，無法估算距離");
+  }
+  const stopRow: PendingStopRow & { from_driver_id: string } = {
+    task_stop_id: tsRow.id,
+    stop_id: tsRow.stop_id,
+    stop_name: meta.name,
+    stop_external_code: meta.external_code,
+    stop_address: (meta as { address?: string | null }).address ?? null,
+    lat: meta.lat,
+    lng: meta.lng,
+    demand_boxes: meta.avg_delivery_volume ?? 0,
+    temperature: meta.temperature_type,
+    preferred_shift: meta.shift,
+    stop_order: tsRow.stop_order,
+    planned_arrival_at: tsRow.planned_arrival_at,
+    service_minutes: meta.default_service_minutes,
+    from_driver_id: fromDriverId
+  };
+
+  // 取所有 active drivers（排除自己）+ 每位 driver 今日的 pending stops（用於算 capacity / load）
+  const { data: driversRaw } = await admin
+    .from("profiles")
+    .select(
+      "id, full_name, employee_code, shift, vehicle_capacity, temperature_capability, is_active"
+    )
+    .eq("role", "driver")
+    .eq("is_active", true)
+    .neq("id", opts.exclude_driver_id);
+  const drivers = (driversRaw ?? []) as Array<{
+    id: string; full_name: string; employee_code: string | null;
+    shift: string | null; vehicle_capacity: number | null;
+    temperature_capability: string | null; is_active: boolean;
+  }>;
+
+  const { data: tasks } = await admin
+    .from("delivery_tasks")
+    .select("id, driver_id")
+    .eq("delivery_date", date)
+    .in("driver_id", drivers.map((d) => d.id));
+  const taskByDriver = new Map<string, string>();
+  for (const t of (tasks ?? []) as Array<{ id: string; driver_id: string }>) {
+    taskByDriver.set(t.driver_id, t.id);
+  }
+  const taskIds = Array.from(taskByDriver.values());
+  interface OwnStopRow {
+    delivery_task_id: string;
+    status: string;
+    stop: { lat: number | null; lng: number | null; avg_delivery_volume: number | null }
+          | Array<{ lat: number | null; lng: number | null; avg_delivery_volume: number | null }>
+          | null;
+  }
+  let ownStops: OwnStopRow[] = [];
+  if (taskIds.length > 0) {
+    const { data } = await admin
+      .from("delivery_task_stops")
+      .select(
+        "id, delivery_task_id, status, " +
+          "stop:stops(lat, lng, avg_delivery_volume)"
+      )
+      .in("delivery_task_id", taskIds)
+      .returns<OwnStopRow[]>();
+    ownStops = data ?? [];
+  }
+
+  // 算每位 driver 的：last known position + capacity used + pending stops 數 + 距離
+  const candidates: StopMoveCandidate[] = [];
+  const W_DIST = 0.35, W_CAP = 0.15, W_SHIFT = 0.15, W_TEMP = 0.15,
+        W_LOAD = 0.15, W_PRIO = 0.05;
+  const DEPOT = { lat: 25.0610, lng: 121.4847 };
+
+  for (const d of drivers) {
+    const taskId = taskByDriver.get(d.id);
+    const owns = ownStops.filter((s) => s.delivery_task_id === taskId);
+    const pending = owns.filter((s) => s.status === "pending" || s.status === "navigating");
+    const lastCompleted = [...owns].reverse().find(
+      (s) => s.status === "completed" || s.status === "arrived"
+    );
+    let lastPos: { lat: number; lng: number } = DEPOT;
+    if (lastCompleted) {
+      const ls = pickFirst(lastCompleted.stop);
+      if (ls?.lat && ls?.lng) lastPos = { lat: ls.lat, lng: ls.lng };
+    } else if (pending.length > 0) {
+      const ps = pickFirst(pending[0].stop);
+      if (ps?.lat && ps?.lng) lastPos = { lat: ps.lat, lng: ps.lng };
+    }
+    const distKm = haversineMeters(lastPos, { lat: stopRow.lat!, lng: stopRow.lng! }) / 1000;
+
+    const usedBoxes = owns.reduce((s, x) => {
+      const sm = pickFirst(x.stop);
+      return s + (sm?.avg_delivery_volume ?? 0);
+    }, 0);
+    const totalCap = d.vehicle_capacity ?? 60;
+    const remaining = Math.max(0, totalCap - usedBoxes);
+
+    const shiftOk = !stopRow.preferred_shift || !d.shift || d.shift === stopRow.preferred_shift;
+    const caps = (d.temperature_capability ?? "ambient,mixed,chilled,frozen").split(",").map((x) => x.trim());
+    const tempOk = !stopRow.temperature || caps.includes(stopRow.temperature) || caps.includes("mixed");
+
+    // 簡易 insertion delta
+    let insertionDelta = 0;
+    let insertionIdx = 0;
+    if (pending.length === 0) {
+      insertionDelta = 2 * haversineMeters(lastPos, { lat: stopRow.lat!, lng: stopRow.lng! }) / 1000;
+    } else {
+      let best = Infinity, bestIdx = 0;
+      const path = [lastPos, ...pending.map((p) => {
+        const ps = pickFirst(p.stop);
+        return ps?.lat && ps?.lng ? { lat: ps.lat, lng: ps.lng } : null;
+      }).filter((x): x is LatLng => x !== null)];
+      for (let i = 0; i < path.length; i++) {
+        const before = path[i];
+        const after = i + 1 < path.length ? path[i + 1] : null;
+        const dBA = after ? haversineMeters(before, after) : 0;
+        const dBN = haversineMeters(before, { lat: stopRow.lat!, lng: stopRow.lng! });
+        const dNA = after ? haversineMeters({ lat: stopRow.lat!, lng: stopRow.lng! }, after) : 0;
+        const delta = (dBN + dNA - dBA) / 1000;
+        if (delta < best) { best = delta; bestIdx = i; }
+      }
+      insertionDelta = best;
+      insertionIdx = bestIdx;
+    }
+
+    const distScore = Math.max(0, 1 - distKm / 30);
+    const capScore = remaining >= stopRow.demand_boxes ? remaining / Math.max(1, totalCap) : 0;
+    const shiftScore = shiftOk ? 1 : 0;
+    const tempScore = tempOk ? 1 : 0;
+    const loadScore = Math.max(0, 1 - pending.length / 30);
+    const score =
+      W_DIST * distScore + W_CAP * capScore + W_SHIFT * shiftScore +
+      W_TEMP * tempScore + W_LOAD * loadScore + W_PRIO * 0.3;
+
+    const reasonParts: string[] = [];
+    if (distScore > 0.7) reasonParts.push(`距離近 (${distKm.toFixed(1)} km)`);
+    else if (distScore < 0.3) reasonParts.push(`距離較遠 (${distKm.toFixed(1)} km)`);
+    if (capScore === 0 && stopRow.demand_boxes > remaining)
+      reasonParts.push(`容量不足 (剩 ${remaining}/${totalCap})`);
+    else if (capScore > 0.6) reasonParts.push(`容量充裕 (剩 ${remaining}/${totalCap})`);
+    if (!shiftOk) reasonParts.push("班別不符");
+    if (!tempOk) reasonParts.push("溫層不符");
+    if (insertionDelta < 5) reasonParts.push(`插入僅 ${insertionDelta.toFixed(1)} km`);
+
+    candidates.push({
+      driver_id: d.id,
+      driver_name: d.full_name,
+      employee_code: d.employee_code,
+      score, rank: 0,
+      reason: reasonParts.join(" · ") || "標準候選",
+      details: {
+        distance_km: distKm,
+        remaining_capacity: remaining,
+        shift_match: shiftOk,
+        temperature_match: tempOk,
+        pending_stops: pending.length,
+        last_known_position: lastPos
+      },
+      insertion_delta_km: insertionDelta,
+      insertion_after_index: insertionIdx
+    });
+  }
+
+  candidates.sort((a, b) => {
+    if (a.details.remaining_capacity < stopRow.demand_boxes && b.details.remaining_capacity >= stopRow.demand_boxes) return 1;
+    if (a.details.remaining_capacity >= stopRow.demand_boxes && b.details.remaining_capacity < stopRow.demand_boxes) return -1;
+    if (!a.details.temperature_match && b.details.temperature_match) return 1;
+    if (a.details.temperature_match && !b.details.temperature_match) return -1;
+    return b.score - a.score;
+  });
+  for (let i = 0; i < candidates.length; i++) candidates[i].rank = i + 1;
+
+  return {
+    stop: stopRow,
+    candidates,
+    context: { drivers_evaluated: candidates.length, date }
+  };
+}
+
+/** 把指定 task_stop 移到目標 driver 今日的 task；目標 task 不存在則自動建。 */
+export async function moveStopToDriver(opts: {
+  task_stop_id: string;
+  target_driver_id: string;
+  date?: string;
+}): Promise<{ moved: true; new_task_id: string; insertion_position: number }> {
+  const admin = createSupabaseAdminClient();
+  const date = opts.date ?? todayInTaipei();
+
+  // 找目標 driver 今日 task；沒有就建一個
+  const { data: existing } = await admin
+    .from("delivery_tasks")
+    .select("id")
+    .eq("driver_id", opts.target_driver_id)
+    .eq("delivery_date", date)
+    .maybeSingle<{ id: string }>();
+  let targetTaskId: string;
+  if (existing) {
+    targetTaskId = existing.id;
+  } else {
+    const { data: created, error } = await admin
+      .from("delivery_tasks")
+      .insert({
+        driver_id: opts.target_driver_id,
+        delivery_date: date,
+        status: "pending"
+      })
+      .select("id")
+      .single();
+    if (error || !created) throw error ?? new Error("Failed to create target task");
+    targetTaskId = created.id;
+  }
+
+  // 算 next stop_order
+  const { data: maxRow } = await admin
+    .from("delivery_task_stops")
+    .select("stop_order")
+    .eq("delivery_task_id", targetTaskId)
+    .order("stop_order", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ stop_order: number }>();
+  const nextOrder = (maxRow?.stop_order ?? 0) + 1;
+
+  // 搬遷
+  const { error: updErr } = await admin
+    .from("delivery_task_stops")
+    .update({
+      delivery_task_id: targetTaskId,
+      stop_order: nextOrder,
+      status: "pending",
+      actual_arrival_at: null,
+      completed_at: null,
+      store_checkin_at: null,
+      uploaded_at: null,
+      confirmed_at: null
+    })
+    .eq("id", opts.task_stop_id);
+  if (updErr) throw updErr;
+
+  return { moved: true, new_task_id: targetTaskId, insertion_position: nextOrder };
+}

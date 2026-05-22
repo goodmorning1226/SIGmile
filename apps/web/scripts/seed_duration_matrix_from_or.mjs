@@ -19,7 +19,8 @@ import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot  = resolve(__dirname, "..", "..", "..");
 const envPath   = resolve(__dirname, "..", ".env.local");
-const csvPath   = resolve(repoRoot, "OR", "duration_matrix_with_service_time.csv");
+// MVP 最終資料：OR_new/duration_matrix_with_service_time.csv（service_time 已 refine）
+const csvPath   = resolve(repoRoot, "OR_new", "duration_matrix_with_service_time.csv");
 
 // ---- env ----
 const env = {};

@@ -124,11 +124,21 @@ export class RoutePlanService {
 
   /**
    * 把 published plan 展開成 delivery_tasks + delivery_task_stops（指定日期；預設今天）
-   * 已存在的同 (date, driver) task 會被略過。
+   *
+   * 預設行為（replace=true 起，過去 false）：
+   *   為了讓今日總覽顯示的站數能對齊「規劃路線」站數，採用 replace 策略 ——
+   *   先把同 (date, driver) 既有 delivery_tasks 整個刪掉（連同 delivery_task_stops，
+   *   有 ON DELETE CASCADE），再依新 plan 建立。
+   *   這對 demo / 重新發布是 idempotent，但會丟掉今天該 driver 的進度紀錄。
    */
-  async generateDailyTasksFromPublished(planId: string, dateISO?: string): Promise<{ tasksCreated: number }> {
+  async generateDailyTasksFromPublished(
+    planId: string,
+    dateISO?: string,
+    opts: { replace?: boolean } = {}
+  ): Promise<{ tasksCreated: number; tasksReplaced: number }> {
     const admin = createSupabaseAdminClient();
     const date = dateISO ?? todayInTaipei();
+    const replace = opts.replace ?? true;
 
     const { data: plan, error } = await admin
       .from("route_plans")
@@ -144,16 +154,38 @@ export class RoutePlanService {
       .eq("route_plan_id", planId);
 
     let created = 0;
+    let replaced = 0;
     for (const a of assignments ?? []) {
       // 沒指派 driver 的 cluster 不建 task（主管要先去 /assignment 補）
       if (!a.driver_id) continue;
-      const { data: exists } = await admin
+
+      const { data: existing } = await admin
         .from("delivery_tasks")
         .select("id")
         .eq("delivery_date", date)
         .eq("driver_id", a.driver_id)
-        .maybeSingle();
-      if (exists) continue;
+        .maybeSingle<{ id: string }>();
+
+      if (existing) {
+        if (!replace) continue;
+        // 先解開 driver_locations.delivery_task_id FK（沒 on delete cascade）
+        await admin
+          .from("driver_locations")
+          .update({ delivery_task_id: null })
+          .eq("delivery_task_id", existing.id);
+        // 再解開可能指向自己 stops 的 current_stop_id（pg 預設 deferred 應該也行，但保險起見）
+        await admin
+          .from("delivery_tasks")
+          .update({ current_stop_id: null })
+          .eq("id", existing.id);
+        // 砍 task — 會 cascade 砍 delivery_task_stops
+        const { error: delErr } = await admin
+          .from("delivery_tasks")
+          .delete()
+          .eq("id", existing.id);
+        if (delErr) throw delErr;
+        replaced++;
+      }
 
       const { data: rs } = await admin
         .from("route_stops")
@@ -192,7 +224,7 @@ export class RoutePlanService {
       }
       created++;
     }
-    return { tasksCreated: created };
+    return { tasksCreated: created, tasksReplaced: replaced };
   }
 }
 
