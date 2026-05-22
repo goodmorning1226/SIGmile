@@ -4,7 +4,6 @@ import * as React from "react";
 import { Field, FieldGroup } from "@/components/form/Field";
 import { NumberInput, PercentInput } from "@/components/form/NumberInput";
 import { SelectInput } from "@/components/form/SelectInput";
-import { TagsInput } from "@/components/form/TagsInput";
 
 /**
  * 不同 prediction_type 的表單。每個 form 接 `value`（已存的 JSON 物件）並透過
@@ -138,65 +137,8 @@ export function StopDemandForm({ value, onChange }: FormProps) {
   );
 }
 
-export function EtaForm({ value, onChange }: FormProps) {
-  return (
-    <FieldGroup title="行車時間" description="站與站之間的平均行車時間估算">
-      <NumField label="站間平均行車時間" path="avg_travel_minutes_between_stops"
-                suffix="分鐘" min={0} step={1}
-                value={value} onChange={onChange} />
-      <NumField label="尖峰時段倍率" path="peak_hour_multiplier"
-                hint="例如 1.4 表示尖峰要多 40% 時間"
-                min={1} step={0.1}
-                value={value} onChange={onChange} />
-    </FieldGroup>
-  );
-}
-
-export function WorkloadForm({ value, onChange }: FormProps) {
-  return (
-    <FieldGroup title="員工負荷" description="每位物流士每日的工作量上限">
-      <NumField label="每人目標站數" path="stops_per_driver_target"
-                suffix="站" min={0} step={1}
-                value={value} onChange={onChange} />
-      <NumField label="每人工時上限" path="max_minutes_per_driver"
-                suffix="分鐘" min={0} step={10}
-                value={value} onChange={onChange} />
-    </FieldGroup>
-  );
-}
-
-export function RiskForm({ value, onChange }: FormProps) {
-  const zones = (get(value, "high_risk_zones") as string[] | undefined) ?? [];
-  return (
-    <div className="space-y-4">
-      <FieldGroup title="高風險區域" description="容易延誤、交通狀況差的區域">
-        <Field
-          label="區域列表"
-          hint="輸入後按 Enter 加入，例如「板橋」"
-          className="sm:col-span-2"
-        >
-          <TagsInput
-            value={zones}
-            onChange={(arr) => onChange(set(value, "high_risk_zones", arr))}
-            placeholder="輸入區域名稱"
-          />
-        </Field>
-      </FieldGroup>
-
-      <FieldGroup title="風險因子">
-        <PercField label="延誤發生機率" path="delay_probability"
-                   hint="預估配送過程中發生延誤的機率"
-                   value={value} onChange={onChange} />
-        <PercField label="天候影響因子" path="weather_factor"
-                   hint="壞天氣造成的額外延誤比率"
-                   value={value} onChange={onChange} />
-      </FieldGroup>
-    </div>
-  );
-}
-
 /* -------------------------------------------------------------- */
-/*  Dispatcher                                                     */
+/*  Dispatcher — 只支援 OR 真的會用到的 σ 和 q                      */
 /* -------------------------------------------------------------- */
 
 export function ParameterForm({
@@ -205,14 +147,7 @@ export function ParameterForm({
   switch (predictionType) {
     case "service_minutes": return <ServiceMinutesForm value={value} onChange={onChange} />;
     case "stop_demand":     return <StopDemandForm    value={value} onChange={onChange} />;
-    case "eta":             return <EtaForm           value={value} onChange={onChange} />;
-    case "workload":        return <WorkloadForm      value={value} onChange={onChange} />;
-    case "risk":            return <RiskForm          value={value} onChange={onChange} />;
     default:
-      return (
-        <div className="rounded-md bg-slate-50 p-4 text-sm text-slate-500">
-          此類型尚未提供表單編輯，請等候後續更新。
-        </div>
-      );
+      return null;  // 非 OR 類型應已在上層 filter 掉，這裡防呆
   }
 }

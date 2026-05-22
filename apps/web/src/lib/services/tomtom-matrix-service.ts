@@ -12,7 +12,8 @@ import "server-only";
  *           "destinations": [ ... ] }
  *   Response: { "matrix": [[ {statusCode,response:{routeSummary:{travelTimeInSeconds, lengthInMeters}}}, ... ]] }
  *
- * Limits (sync): origins×destinations <= 700, max 100 per side. 對 MVP（<=15 stops）夠用。
+ * Limits (sync)：單次 origins×destinations ≤ 100。超過時這支 helper 會自動切成
+ *   CHUNK×CHUNK 的子矩陣分批 call、再拼回完整 n×n。
  */
 
 export interface LatLng {
@@ -29,9 +30,16 @@ export interface MatrixResult {
   isReal: boolean;
 }
 
+/** TomTom sync matrix 單次最大 cells；保守取 100 → 10×10 子矩陣。 */
+const TOMTOM_CHUNK = 10;
+/** 同時並發的子矩陣 call 數（避免 rate limit 429）。 */
+const TOMTOM_CONCURRENCY = 4;
+
 /**
  * 給一組座標（depot + stops），回傳 N×N 的時間矩陣（分鐘）。
  * 若 TOMTOM_API_KEY 未設或部分點缺座標，fallback 為 haversine 估算。
+ *
+ * 大矩陣（n > 10）會自動切 chunk 分批 call。
  */
 export async function computeDurationMatrix(
   points: LatLng[]
@@ -46,45 +54,101 @@ export async function computeDurationMatrix(
     return haversineFallback(points);
   }
 
-  const origins = points.map((p) => ({ point: { latitude: p.lat, longitude: p.lng } }));
-  const destinations = origins;
+  // 先用 haversine 填底（個別 chunk 失敗時保底），再用 TomTom 真值覆寫成功的 cell
+  const result = haversineFallback(points);
+  result.isReal = false;
 
-  try {
-    const url = `https://api.tomtom.com/routing/1/matrix/sync/json?key=${apiKey}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ origins, destinations }),
-      // Routing Matrix sync 可能跑數秒，給 30 秒 timeout
-      signal: AbortSignal.timeout(30_000)
-    });
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`TomTom Matrix ${res.status}: ${txt.slice(0, 200)}`);
-    }
-    const data = (await res.json()) as TomTomMatrixResponse;
-    const durationMinutes: number[][] = Array.from({ length: n }, () => Array(n).fill(0));
-    const distanceMeters: number[][] = Array.from({ length: n }, () => Array(n).fill(0));
-    for (let i = 0; i < n; i++) {
-      const row = data.matrix[i];
-      for (let j = 0; j < n; j++) {
-        const cell = row?.[j];
-        if (cell?.statusCode === 200 && cell.response?.routeSummary) {
-          durationMinutes[i][j] = cell.response.routeSummary.travelTimeInSeconds / 60;
-          distanceMeters[i][j] = cell.response.routeSummary.lengthInMeters;
-        } else {
-          // 個別 pair 失敗 → 該 cell 用 haversine 補
-          const fb = haversinePair(points[i], points[j]);
-          durationMinutes[i][j] = fb.minutes;
-          distanceMeters[i][j] = fb.meters;
+  // 切 chunk
+  const chunks: { from: number; to: number }[] = [];
+  for (let i = 0; i < n; i += TOMTOM_CHUNK) {
+    chunks.push({ from: i, to: Math.min(i + TOMTOM_CHUNK, n) });
+  }
+  // 所有 (originChunk × destinationChunk) pairs
+  const pairs: Array<{ o: { from: number; to: number }; d: { from: number; to: number } }> = [];
+  for (const o of chunks) for (const d of chunks) pairs.push({ o, d });
+
+  let anyReal = false;
+  let allFailed = true;
+
+  // 限制並發
+  for (let i = 0; i < pairs.length; i += TOMTOM_CONCURRENCY) {
+    const batch = pairs.slice(i, i + TOMTOM_CONCURRENCY);
+    const settled = await Promise.allSettled(
+      batch.map((p) => fetchSubMatrix(apiKey, points, p.o, p.d))
+    );
+    for (let k = 0; k < settled.length; k++) {
+      const r = settled[k];
+      const { o, d } = batch[k];
+      if (r.status === "fulfilled") {
+        const sub = r.value;
+        allFailed = false;
+        anyReal = true;
+        for (let oi = 0; oi < o.to - o.from; oi++) {
+          for (let di = 0; di < d.to - d.from; di++) {
+            const dur = sub.dur[oi][di];
+            const dis = sub.dis[oi][di];
+            if (dur != null && Number.isFinite(dur)) {
+              result.durationMinutes[o.from + oi][d.from + di] = dur;
+              result.distanceMeters[o.from + oi][d.from + di] = dis;
+            }
+          }
         }
+      } else {
+        console.warn(
+          `[tomtom-matrix] sub-matrix [${o.from}..${o.to})×[${d.from}..${d.to}) failed; using haversine for this block:`,
+          r.reason
+        );
       }
     }
-    return { durationMinutes, distanceMeters, isReal: true };
-  } catch (err) {
-    console.warn("[tomtom-matrix] fallback to haversine:", err);
-    return haversineFallback(points);
   }
+
+  if (allFailed) {
+    // 全部 chunk 都失敗（網路 / API key 問題）→ 已經是 haversine fallback
+    return result;
+  }
+  result.isReal = anyReal;
+  return result;
+}
+
+async function fetchSubMatrix(
+  apiKey: string,
+  points: LatLng[],
+  o: { from: number; to: number },
+  d: { from: number; to: number }
+): Promise<{ dur: number[][]; dis: number[][] }> {
+  const origins = points.slice(o.from, o.to).map((p) => ({
+    point: { latitude: p.lat, longitude: p.lng }
+  }));
+  const destinations = points.slice(d.from, d.to).map((p) => ({
+    point: { latitude: p.lat, longitude: p.lng }
+  }));
+  const url = `https://api.tomtom.com/routing/1/matrix/sync/json?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ origins, destinations }),
+    signal: AbortSignal.timeout(30_000)
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`TomTom Matrix ${res.status}: ${txt.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as TomTomMatrixResponse;
+  const rows = o.to - o.from;
+  const cols = d.to - d.from;
+  const dur: number[][] = Array.from({ length: rows }, () => Array(cols).fill(NaN));
+  const dis: number[][] = Array.from({ length: rows }, () => Array(cols).fill(NaN));
+  for (let i = 0; i < rows; i++) {
+    const row = data.matrix[i];
+    for (let j = 0; j < cols; j++) {
+      const cell = row?.[j];
+      if (cell?.statusCode === 200 && cell.response?.routeSummary) {
+        dur[i][j] = cell.response.routeSummary.travelTimeInSeconds / 60;
+        dis[i][j] = cell.response.routeSummary.lengthInMeters;
+      }
+    }
+  }
+  return { dur, dis };
 }
 
 interface TomTomMatrixResponse {

@@ -18,7 +18,8 @@ export interface AnalyzeDeliveryStatusInput {
 
 export interface PredictPlanningParametersInput {
   planning_period_id: string;
-  prediction_type: "service_minutes" | "stop_demand" | "eta" | "workload" | "risk";
+  // 只支援 OR formulation 真的會用到的兩種：σ (service_minutes) 與 q (stop_demand)
+  prediction_type: "service_minutes" | "stop_demand";
   historic_data?: Record<string, unknown>;
 }
 
@@ -90,13 +91,10 @@ export class MockAIService implements IAIService {
   }
 
   async predictPlanningParameters(input: PredictPlanningParametersInput) {
-    // 隨 prediction_type 給不同 mock 內容；型別保留彈性
+    // 只支援 OR 真的吃的兩種預測：σ (service_minutes) 和 q (stop_demand)
     const map: Record<string, Record<string, unknown>> = {
       service_minutes: { mean: 10, p90: 14, by_stop_type: { convenience_store: 10 } },
-      stop_demand:     { mean_boxes: 8, peak_day: "Friday" },
-      eta:             { avg_travel_minutes_between_stops: 12 },
-      workload:        { stops_per_driver_target: 28 },
-      risk:            { high_risk_zones: ["板橋"], delay_probability: 0.18 }
+      stop_demand:     { mean_boxes: 8, peak_day: "Friday" }
     };
     return {
       output_parameters: map[input.prediction_type] ?? { note: "mock" },

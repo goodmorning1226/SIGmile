@@ -153,11 +153,6 @@ export function DriversExcelPanel() {
         </div>
       )}
 
-      <p className="text-xs text-slate-500">
-        提示：先「下載 Excel」拿到最新範本（含現有物流士）→ 在 Excel 加 row 或編輯欄位 → 「上傳 Excel」灌回。
-        欄位依 <strong>Email</strong> 做 upsert：已存在的 auth user 只更新 profile（密碼不變）；
-        Email 沒對應 auth user 就建新帳號 + 自動產密碼（一次性顯示）。
-      </p>
     </div>
   );
 }

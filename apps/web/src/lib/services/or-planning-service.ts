@@ -4,7 +4,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { OrOutputPlanV2, ShiftType, TemperatureType, TripIndex } from "@/types/domain";
-import { computeDurationMatrix } from "@/lib/services/tomtom-matrix-service";
+import { getOrComputeCachedMatrix } from "@/lib/services/duration-matrix-cache-service";
+import { geocodeAddress } from "@/lib/services/tomtom-geocoding-service";
 
 /**
  * OR 規劃服務（MTVRP, multi-trip vehicle routing）。
@@ -44,6 +45,7 @@ export interface IORPlanningService {
 
 interface StopRow {
   id: string;
+  address: string;
   default_service_minutes: number;
   avg_delivery_volume: number | null;
   shift: string | null;
@@ -315,15 +317,24 @@ export class MockORPlanningService implements IORPlanningService {
 
     const params = (job.input_parameters ?? {}) as Record<string, any>;
     const weightsRaw = (job.weights ?? params?.weights ?? {}) as Record<string, any>;
-    const alpha = Number(weightsRaw?.alpha_travel_time ?? 1.0);
-    const beta  = Number(weightsRaw?.beta_dispatch ?? 300.0);
-    const gamma = 1.5;                                                        // γ 不開放 UI
-    const defaultCapacity: number = params?.defaults?.vehicle_capacity_boxes
-      ?? params?.vehicle_capacity_boxes ?? 60;
-    const defaultMaxWork:  number = params?.defaults?.max_work_minutes
-      ?? params?.workload?.max_minutes_per_driver ?? 600;
-    const defaultServiceMin: number = params?.defaults?.service_minutes_default
-      ?? params?.service_minutes?.mean ?? 10;
+    // OR python 5 個權重：α 工時 / β 派工 / γ 加班 / δ_W 工時平衡 / δ_B 箱數平衡
+    const alpha   = Number(weightsRaw?.alpha_travel_time ?? weightsRaw?.alpha   ?? 1.0);
+    const beta    = Number(weightsRaw?.beta_dispatch     ?? weightsRaw?.beta    ?? 300.0);
+    const gamma   = Number(weightsRaw?.gamma_overtime    ?? weightsRaw?.gamma   ?? 1.5);
+    const deltaW  = Number(weightsRaw?.delta_workload    ?? weightsRaw?.delta_w ?? 0.0);
+    const deltaB  = Number(weightsRaw?.delta_boxes       ?? weightsRaw?.delta_b ?? 0.0);
+    // H̄ / H — UI 上是兩個獨立欄位；舊版可能在 defaults.max_work_minutes 或 workload.max_minutes_per_driver
+    const hoursMax = Number(
+      params?.hours?.max_work_minutes
+        ?? params?.defaults?.max_work_minutes
+        ?? params?.workload?.max_minutes_per_driver ?? 720
+    );
+    const hoursOt  = Number(
+      params?.hours?.overtime_threshold ?? 480
+    );
+    // Q / σ 不在這個 UI 設定，從 driver / stop master 抓；沒設就用這個 fallback
+    const fallbackCapacity     = 60;
+    const fallbackServiceMin   = 10;
     const numTrips: number = params?.num_trips ?? 2;
     const timeLimitSec = Number(process.env.OR_ENGINE_TIMEOUT_SEC ?? "120");
     const mipGap = Number(params?.mip_gap ?? 0.05);
@@ -353,7 +364,7 @@ export class MockORPlanningService implements IORPlanningService {
     const { data: stopsRaw } = await admin
       .from("stops")
       .select(
-        "id, name, default_service_minutes, avg_delivery_volume, " +
+        "id, name, address, default_service_minutes, avg_delivery_volume, " +
           "shift, temperature_type, lat, lng, city, district"
       )
       .eq("is_active", true)
@@ -375,6 +386,25 @@ export class MockORPlanningService implements IORPlanningService {
     if (drivers.length === 0 || stops.length === 0) {
       return this.runRealFallback(jobId, "no-driver-or-stop", diagnostics);
     }
+
+    // ★ 自動 geocode 缺座標的 stops（避免 OR 拿到 (0,0) 算出跨地球的離譜時間）
+    //   只 geocode 「有地址但 lat 或 lng 為 null」的 stop，補完後直接寫回 DB。
+    let autoGeocodedDuringRun = 0;
+    if (process.env.TOMTOM_API_KEY) {
+      const stopsToGeocode = stops.filter(
+        (s) => (s.lat == null || s.lng == null) && s.address
+      );
+      for (const s of stopsToGeocode) {
+        const g = await geocodeAddress(s.address);
+        if (g) {
+          s.lat = g.lat;
+          s.lng = g.lng;
+          await admin.from("stops").update({ lat: g.lat, lng: g.lng }).eq("id", s.id);
+          autoGeocodedDuringRun++;
+        }
+      }
+    }
+    diagnostics.auto_geocoded_during_run = autoGeocodedDuringRun;
 
     // ---- Pre-flight：先做幾個 feasibility check，避免直接送 Gurobi infeasible ----
     // 1. 過濾掉「沒有任何 driver 能服務」的 stop（班別不匹配）
@@ -403,17 +433,49 @@ export class MockORPlanningService implements IORPlanningService {
       );
     }
 
-    // 2. 容量檢查（軟）：總需求 vs Σ(driver_cap × num_trips)
-    const totalDemand = serviceableStops.reduce(
-      (sum, s) => sum + (s.avg_delivery_volume ?? 1), 0
-    );
-    const totalCapacity = drivers.reduce(
-      (sum, d) => sum + (d.vehicle_capacity ?? defaultCapacity), 0
-    ) * numTrips;
-    diagnostics.total_demand = totalDemand;
+    // 2. 容量檢查 — 按 shift 分別算（OR 內部約束是 per-shift 切分的）
+    const dayStops   = serviceableStops.filter((s) => shiftToInt(s.shift as ShiftType | null) === 1);
+    const nightStops = serviceableStops.filter((s) => shiftToInt(s.shift as ShiftType | null) === 2);
+    const dayDrivers   = drivers.filter((d) => shiftToInt(d.shift as ShiftType | null) === 1);
+    const nightDrivers = drivers.filter((d) => shiftToInt(d.shift as ShiftType | null) === 2);
+
+    const sumDemand = (arr: typeof stops) =>
+      arr.reduce((s, x) => s + (x.avg_delivery_volume ?? 1), 0);
+    const sumCap = (arr: typeof drivers) =>
+      arr.reduce((s, d) => s + (d.vehicle_capacity ?? fallbackCapacity), 0) * numTrips;
+
+    const totalDemand   = sumDemand(serviceableStops);
+    const totalCapacity = sumCap(drivers);
+    const dayDemand   = sumDemand(dayStops);
+    const dayCapacity = sumCap(dayDrivers);
+    const nightDemand   = sumDemand(nightStops);
+    const nightCapacity = sumCap(nightDrivers);
+
+    diagnostics.total_demand   = totalDemand;
     diagnostics.total_capacity = totalCapacity;
+    diagnostics.day_demand     = dayDemand;
+    diagnostics.day_capacity   = dayCapacity;
+    diagnostics.night_demand   = nightDemand;
+    diagnostics.night_capacity = nightCapacity;
     diagnostics.serviceable_stops = serviceableStops.length;
 
+    // 任一班別 demand > capacity 都 infeasible
+    if (dayDemand > dayCapacity) {
+      return this.runRealFallback(
+        jobId,
+        `日班需求 ${dayDemand} > 日班容量 ${dayCapacity}（${dayDrivers.length} 位日班 driver × ${numTrips} 趟）。` +
+        `多開日班 driver 或把部分 stops 改為夜班。`,
+        diagnostics
+      );
+    }
+    if (nightDemand > nightCapacity) {
+      return this.runRealFallback(
+        jobId,
+        `夜班需求 ${nightDemand} > 夜班容量 ${nightCapacity}（${nightDrivers.length} 位夜班 driver × ${numTrips} 趟）。` +
+        `多開夜班 driver 或把部分 stops 改為日班。`,
+        diagnostics
+      );
+    }
     if (totalDemand > totalCapacity) {
       return this.runRealFallback(
         jobId,
@@ -423,16 +485,22 @@ export class MockORPlanningService implements IORPlanningService {
       );
     }
 
-    // ---- TomTom 算 duration matrix（只算 serviceable 的）----
+    // ---- Duration matrix（先查 DB cache，缺的才打 TomTom）----
     const depotLatLng = {
       lat: Number(dc?.lat ?? 25.0610),
       lng: Number(dc?.lng ?? 121.4847)
     };
-    const points = [
-      depotLatLng,
-      ...serviceableStops.map((s) => ({ lat: Number(s.lat ?? 0), lng: Number(s.lng ?? 0) }))
+    const nodes = [
+      { id: dc?.id ?? "depot", ...depotLatLng },
+      ...serviceableStops.map((s) => ({
+        id: s.id,
+        lat: Number(s.lat ?? 0),
+        lng: Number(s.lng ?? 0)
+      }))
     ];
-    const matrix = await computeDurationMatrix(points);
+    const matrix = await getOrComputeCachedMatrix(nodes);
+    diagnostics.matrix_cache_hits   = matrix.cache_hits;
+    diagnostics.matrix_fresh_fetched = matrix.fresh_fetched;
 
     // ---- 組 Python 輸入 ----
     const pyInput = {
@@ -442,18 +510,23 @@ export class MockORPlanningService implements IORPlanningService {
         lat: Number(s.lat ?? 0),
         lng: Number(s.lng ?? 0),
         demand: s.avg_delivery_volume ?? 1,
-        service_minutes: s.default_service_minutes ?? defaultServiceMin,
+        service_minutes: s.default_service_minutes ?? fallbackServiceMin,
         shift: shiftToInt(s.shift as ShiftType | null)
       })),
       drivers: drivers.map((d) => ({
         id: d.id,
         shift: shiftToInt(d.shift as ShiftType | null),
-        capacity: d.vehicle_capacity ?? defaultCapacity,
-        max_minutes: (d as any).max_work_minutes ?? defaultMaxWork,
-        overtime_threshold: 480
+        capacity: d.vehicle_capacity ?? fallbackCapacity,
+        // H̄ / H 從 UI 的「工時規則」全域帶入；個別 driver 的 profile 有設就以 profile 優先
+        max_minutes:        (d as any).max_work_minutes ?? hoursMax,
+        overtime_threshold: hoursOt
       })),
       tau: matrix.durationMinutes,
-      weights: { alpha, beta, gamma },
+      weights: {
+        alpha, beta, gamma,
+        delta_w: deltaW,
+        delta_b: deltaB
+      },
       num_trips: numTrips,
       time_limit_sec: timeLimitSec,
       mip_gap: mipGap
@@ -474,11 +547,15 @@ export class MockORPlanningService implements IORPlanningService {
       let reason = `solver_${pyResult.error_kind}: ${pyResult.error}`;
       if (pyResult.error?.includes("status=3")) {
         reason =
-          "Gurobi 找不到可行解（infeasible）。最常見原因：" +
-          "(a) 工時 / 容量 / 班別約束過嚴 → 試試增加司機 / 拉高工時上限 / 降低站數，" +
-          "(b) 某些 stops 的 shift/temperature 沒有對應 driver。" +
-          ` Pre-check 過了（需求 ${diagnostics.total_demand} ≤ 容量 ${diagnostics.total_capacity}），` +
-          "所以問題可能在工時 H̄ (max_work_minutes) — Solver 用 480 / 600 分鐘可能不夠跑全部站。";
+          `Gurobi 找不到可行解（infeasible）。Pre-check 過了（` +
+          `需求 ${diagnostics.total_demand} ≤ 容量 ${diagnostics.total_capacity}、` +
+          `${diagnostics.skipped_due_to_shift ?? 0} 個 stop 因班別無法服務）。` +
+          `Gurobi 用：H̄=${hoursMax} 分鐘 / H=${hoursOt} 分鐘、num_trips=${numTrips}、` +
+          `α=${alpha}, β=${beta}, γ=${gamma}, δ_W=${deltaW}, δ_B=${deltaB}。` +
+          `常見可行解卡點：` +
+          `(a) 班別切分讓單一班的 stops 容量塞不下（看 day vs night 的 capacity 是否真的能 cover demand）；` +
+          `(b) 某些 stops 的 demand > 任一 driver 的 capacity；` +
+          `(c) 工時 H̄ 太緊（單一 driver 工時 + 服務時間總和超過 H̄）。`;
       }
       return this.runRealFallback(jobId, reason, diagnostics);
     }
@@ -736,6 +813,7 @@ interface PythonSolverOutput {
     dispatched: boolean;
     total_work_minutes: number;
     overtime_minutes: number;
+    total_boxes?: number;
   }>;
   routes?: Array<{
     driver_id: string;
@@ -754,6 +832,15 @@ interface PythonSolverOutput {
     }>;
   }>;
   unassigned_stops?: string[];
+  /** 平衡指標：最忙最閒差距（OR python balance block） */
+  balance?: {
+    work_min_range: number;
+    work_min_max:   number;
+    work_min_min:   number;
+    box_range:      number;
+    box_max:        number;
+    box_min:        number;
+  };
 }
 
 function resolvePythonExe(engineRoot: string): string {
@@ -927,7 +1014,9 @@ function buildOutputPlanV2(
     metadata: {
       gap: py.gap,
       runtime_sec: py.runtime_sec,
-      matrix_source: matrixIsReal ? "tomtom" : "haversine"
+      matrix_source: matrixIsReal ? "tomtom" : "haversine",
+      // OR python 回的平衡指標 — UI 可顯示「最忙最閒差距」
+      balance: py.balance ?? null
     }
   };
 }

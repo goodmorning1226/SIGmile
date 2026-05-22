@@ -21,7 +21,9 @@ export async function POST(request: Request) {
       return fail("BAD_REQUEST", "planning_period_id 與 prediction_type 為必填", 400);
     }
 
-    const ALLOWED = ["service_minutes", "stop_demand", "eta", "workload", "risk"] as const;
+    // 只接受 OR 真的會用到的 σ (service_minutes) 和 q (stop_demand)；
+    // ETA / workload / risk 不在 OR formulation 內，已移除。
+    const ALLOWED = ["service_minutes", "stop_demand"] as const;
     if (!ALLOWED.includes(body.prediction_type as (typeof ALLOWED)[number])) {
       return fail("BAD_REQUEST", `prediction_type 必須為 ${ALLOWED.join("/")}`, 400);
     }

@@ -43,7 +43,6 @@ export default async function DriversPage() {
           </div>
           <CardDescription>
             目前共 <strong className="text-slate-900">{driverCount ?? 0}</strong> 位啟用中的物流士。
-            OR 試算時會自動使用所有啟用中的物流士去分配路線，<strong>不用再寫 SQL</strong>。
           </CardDescription>
         </CardHeader>
         <CardContent>

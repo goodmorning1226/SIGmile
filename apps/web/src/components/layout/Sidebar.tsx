@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Truck, Send, History, Sparkles, LogOut, Layers, Users
+  LayoutDashboard, Truck, Send, History, LogOut, Layers,
+  Zap, LifeBuoy
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -22,16 +23,16 @@ const NAV: readonly NavGroup[] = [
   {
     title: "路線管理",
     items: [
-      { href: "/or-replanning", label: "發布新路線", icon: Send },
-      { href: "/clusters",      label: "路線集",     icon: Layers },
-      { href: "/assignment",    label: "物流士分配", icon: Users },
+      { href: "/or-replanning",  label: "發布新路線", icon: Send },
+      { href: "/clusters",       label: "路線分配",   icon: Layers },
       { href: "/route-planning", label: "路線歷史",   icon: History }
     ]
   },
   {
-    title: "分析",
+    title: "即時應變",
     items: [
-      { href: "/ai-analysis", label: "AI 分析", icon: Sparkles }
+      { href: "/urgent",    label: "急件派遣", icon: Zap },
+      { href: "/emergency", label: "緊急應變", icon: LifeBuoy }
     ]
   }
 ];
@@ -88,7 +89,6 @@ export function Sidebar({ userName }: { userName: string }) {
                     >
                       <Icon className={cn("h-4 w-4", active ? "text-brand-600" : "text-slate-400 group-hover:text-slate-600")} />
                       {item.label}
-                      {active && <span className="ml-auto size-1.5 rounded-full bg-brand-600" />}
                     </Link>
                   </li>
                 );

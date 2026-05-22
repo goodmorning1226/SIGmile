@@ -2,15 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Plus, Clock, Box, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+// 只保留 OR 真的會吃的兩種預測：
+//   - service_minutes → 對應 OR σ_i
+//   - stop_demand     → 對應 OR q_i
+// ETA / 員工負荷 / 風險評估 不在 OR formulation 內，已移除。
 const ALL = [
-  { key: "service_minutes", label: "服務時間" },
-  { key: "stop_demand",     label: "站點需求" },
-  { key: "eta",             label: "ETA 預估" },
-  { key: "workload",        label: "員工負荷" },
-  { key: "risk",            label: "風險評估" }
+  { key: "service_minutes", label: "服務時間 σ", hint: "OR 約束用：每站平均停留分鐘",     icon: Clock },
+  { key: "stop_demand",     label: "站點需求 q", hint: "OR 容量用：每站平均箱數 q_i",     icon: Box }
 ];
 
 interface Props {
@@ -40,6 +41,7 @@ export function GeneratePanel({ periodId, existingTypes }: Props) {
         return;
       }
       setOpen(false);
+      setType("");
       router.refresh();
     });
   };
@@ -60,48 +62,57 @@ export function GeneratePanel({ periodId, existingTypes }: Props) {
       </Button>
 
       {open && (
-        <div className="fixed inset-0 z-50 grid place-items-start overflow-y-auto bg-slate-900/40 p-6 backdrop-blur-sm">
-          <div className="mx-auto mt-12 w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-card">
-            <div className="flex items-start justify-between">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-6 backdrop-blur-sm">
+          <div className="mx-auto mt-12 w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-card">
+            <div className="flex items-start justify-between border-b border-slate-100 p-5">
               <div>
                 <div className="text-base font-semibold">產生 AI 預測參數</div>
                 <p className="mt-1 text-xs text-slate-500">
-                  將呼叫 MockAIService 並寫一筆 ai_parameter_predictions
+                  選一個類型，系統會以 MockAIService 回傳預設值寫進 ai_parameter_predictions
                 </p>
               </div>
               <button
-                className="text-sm text-slate-400 hover:text-slate-700"
+                className="text-slate-400 hover:text-slate-700"
                 onClick={() => setOpen(false)}
               >
-                關閉
+                <X className="size-5" />
               </button>
             </div>
 
-            <div className="mt-4 space-y-2">
-              {available.map((t) => (
-                <label
-                  key={t.key}
-                  className={`flex cursor-pointer items-center justify-between rounded-md border px-3 py-2 ${
-                    type === t.key
-                      ? "border-brand-300 bg-brand-50"
-                      : "border-slate-200 hover:bg-slate-50"
-                  }`}
-                >
-                  <span className="text-sm">
-                    <span className="font-medium">{t.label}</span>
-                    <span className="ml-2 text-xs text-slate-400">{t.key}</span>
-                  </span>
-                  <input
-                    type="radio"
-                    name="ptype"
-                    checked={type === t.key}
-                    onChange={() => setType(t.key)}
-                  />
-                </label>
-              ))}
+            <div className="p-5">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {available.map((t) => {
+                  const Icon = t.icon;
+                  const active = type === t.key;
+                  return (
+                    <button
+                      key={t.key}
+                      onClick={() => setType(t.key)}
+                      className={
+                        "flex items-start gap-3 rounded-lg border p-3 text-left transition " +
+                        (active
+                          ? "border-brand-500 bg-brand-50 ring-2 ring-brand-200"
+                          : "border-slate-200 hover:bg-slate-50")
+                      }
+                    >
+                      <div className={
+                        "grid size-9 shrink-0 place-items-center rounded-lg " +
+                        (active ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-500")
+                      }>
+                        <Icon className="size-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-900">{t.label}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">{t.hint}</div>
+                        <div className="mt-0.5 text-[10px] font-mono text-slate-400">{t.key}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="flex justify-end gap-2 border-t border-slate-100 p-4">
               <Button variant="outline" onClick={() => setOpen(false)}>取消</Button>
               <Button onClick={run} loading={pending} disabled={!type}>產生</Button>
             </div>
